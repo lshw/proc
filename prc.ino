@@ -79,6 +79,7 @@ void setup() {
 boolean alreadyConnected = false;
 EthernetClient client;
 uint32_t blank_time = 0;
+uint8_t add_count = 0;
 void loop() {
   char ch, chlen = 0, chs[250];
   if (alreadyConnected) {
@@ -95,9 +96,15 @@ void loop() {
     if (debug)
       Serial.println(F("\r\n#new client in"));
   }
-
   while (client.available() > 0) { //tcp有数据进来
     ch = client.read();
+    if (ch == 0xd || ch == 0xa) {
+      if (add_count > 4) {
+        menu();
+      }
+    }
+    if (ch == '+' ) add_count++;
+    else add_count = 0;
     if (blank_time > millis()) continue; //开始10ms收到的内容会被忽略
     if (debug) {
       Serial.write(' ');
@@ -183,4 +190,43 @@ inline void displaybz() {
     Serial.println(osc + i);
   }
   Serial.flush();
+}
+
+void menu() {
+  uint32_t passwd;
+  char ch;
+  client.println(F("passwd:"));
+  client.setTimeout(10000);
+  passwd = client.parseInt();
+  if (passwd != 88018877) return;
+  client.println(F("\r\n1-reset,2-powerdown,3-out off,4-out on,5-quit"));
+  while (1) {
+    if (client.readBytes(&ch, 1) != 1) return;
+
+    switch (ch) {
+      case '1':
+        client.write(ch);
+        pc_reset_on = 300;
+        break;
+      case '2':
+        client.write(ch);
+        pc_power_on = 5000;
+        break;
+      case '3':
+        client.write(ch);
+        digitalWrite(_24V_OUT, LOW);
+        break;
+      case '4':
+        client.write(ch);
+        digitalWrite(_24V_OUT, HIGH);
+        break;
+
+      case '5':
+      case 'q':
+      case 'Q':
+        client.write(ch);
+        return;
+        break;
+    }
+  }
 }
