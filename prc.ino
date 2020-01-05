@@ -14,11 +14,15 @@
 #define EEPROM_OFFSET 13
 //eeprom 内存分配
 float celsius;//温度
-
+boolean alreadyConnected = false;
+EthernetClient client;
+uint8_t add_count = 0;
+uint32_t timer1 = 0; //秒
 uint16_t volatile dogcount = 0; //超时重启，主程序循环清零，不清零的话100秒重启系统
 
 #define S_TCP  1
 #define S_SERIAL 0
+
 uint8_t eeprom_read(uint16_t addr) {
   return EEPROM.read(addr + EEPROM_OFFSET);
 }
@@ -26,11 +30,24 @@ void eeprom_write(uint16_t addr, uint8_t data) {
   if (eeprom_read(addr) != data)
     EEPROM.write(addr + EEPROM_OFFSET, data);
 }
+
+uint32_t eeprom_read_u32(uint16_t addr) {
+  return ((uint32_t) eeprom_read(addr) << 24) |
+         ((uint32_t) eeprom_read(addr + 1) << 16) |
+         ((uint32_t) eeprom_read(addr + 2) << 8) |
+         eeprom_read(addr + 3);
+}
+void eeprom_write_u32(uint16_t addr, uint32_t data) {
+  eeprom_write(addr, (data >> 24) & 0xff);
+  eeprom_write(addr + 1, (data >> 16) & 0xff);
+  eeprom_write(addr + 2, (data >> 8) & 0xff);
+  eeprom_write(addr + 3, data & 0xff);
+}
+
 uint8_t goto_bootloader __attribute__ ((section (".noinit"))); //需要进入bootloader
 uint8_t goto_bootloader_crc __attribute__ ((section (".noinit")));
 
 byte ds_addr[8];
-uint32_t password;
 OneWire ds(DS);
 
 enum
@@ -43,6 +60,7 @@ enum
   MAC3,
   MAC4,
   MAC5,
+  IS_DHCP,
   IP0,
   IP1,
   IP2,
@@ -55,9 +73,13 @@ enum
   GW1,
   GW2,
   GW3,
-  SPEED,
-  COMSET_H,
-  COMSET_L,
+  SPEED0,
+  SPEED1,
+  SPEED2,
+  SPEED3,
+  DATA_LEN,
+  DATA_PARI,
+  STOP_LEN,
   PASSWD0,
   PASSWD1,
   PASSWD2,
@@ -84,36 +106,41 @@ void setup() {
   osc = OSCCAL;
   ds1820();
   check_rom();
-  digitalWrite(_24V_OUT, eeprom_read(VOUT_SET));
-  password = 0;
-  password += eeprom_read(PASSWD3);
-  password = (password << 8) | eeprom_read(PASSWD2);
-  password = (password << 8) | eeprom_read(PASSWD1);
-  password = (password << 8) | eeprom_read(PASSWD0);
   OSCCAL = eeprom_read(RC_CAL);
+  uint32_t com_speed = eeprom_read_u32(SPEED0);
+  if (com_speed == 0) com_speed = 115200;
+  uint8_t com_set = get_comset();
+  Serial.begin(com_speed, com_set);
+  while (!Serial) ;
+  Serial.write('#');
+  Serial.print(com_speed);
+  Serial.print(F(","));
+  Serial.write(eeprom_read(DATA_LEN));
+  Serial.write(eeprom_read(DATA_PARI));
+  Serial.println((char)eeprom_read(STOP_LEN));
+  digitalWrite(_24V_OUT, eeprom_read(VOUT_SET));
   for (uint8_t i = 0; i < 6; i++)
     mac[i] = eeprom_read(MAC0 + i);
   IPAddress ip(eeprom_read(IP0), eeprom_read(IP1), eeprom_read(IP2), eeprom_read(IP3));
   IPAddress gateway(eeprom_read(GW0), eeprom_read(GW1), eeprom_read(GW2), eeprom_read(GW3));
   IPAddress subnet(eeprom_read(NETMARK0), eeprom_read(NETMARK1), eeprom_read(NETMARK2), eeprom_read(NETMARK3));
-  Ethernet.begin(mac, ip, gateway, subnet);
+
+  if (eeprom_read(IS_DHCP) == 'N' ||  Ethernet.begin(mac) == 0)
+    Ethernet.begin(mac, ip, gateway, subnet); //dhcp==N 或者dhcp获取失败
+  Serial.print(F("#ip:"));
+  Serial.println(Ethernet.localIP());
   server.begin();
-  Serial.begin(115200);
-  while (!Serial) ;
   setup_watchdog(WDTO_30MS);
 }
-boolean alreadyConnected = false;
-EthernetClient client;
-uint8_t add_count = 0;
-uint32_t timer1 = 0; //秒
 void loop() {
+  char ch;
   dogcount = 0;
   if (!alreadyConnected) {
     client = server.available();
     if (client) {
       alreadyConnected = true;
       delay(100);
-      while (client.available()) client.read();
+      s_clean(&client);
       client.print(F("C="));
       client.println(celsius);
     }
@@ -134,7 +161,22 @@ void loop() {
     ds1820();
   }
   if (Serial.available() > 0) {
-    menu(S_SERIAL);
+    while (Serial.available()) {
+      switch (Serial.read()) {
+        case '+':
+          add_count++;
+          break;
+        case 0xd:
+        case 0xa:
+          if (add_count > 4) {
+            add_count = 0;
+            menu(S_SERIAL);
+          }
+          break;
+        default:
+          add_count = 0;
+      }
+    }
   }
 }
 
@@ -142,8 +184,8 @@ void com_shell() {
   char ch, chlen = 0, chs[250];
 
   if (!client.connected()) return;
-  while (Serial.available()) Serial.read();
-  while (client.available()) client.read();
+  s_clean(&Serial);
+  s_clean(&client);
   while (1) {
     dogcount = 0;
     if (!client.connected()) return;
@@ -226,7 +268,7 @@ void setup_watchdog(int ii) {
 }
 
 void menu( uint8_t  stype) {
-  uint32_t passwd;
+  uint32_t passwd, password;
   char ch;
   Stream *s;
   if (stype == S_SERIAL)
@@ -240,31 +282,44 @@ void menu( uint8_t  stype) {
     if (ds_addr[i] < 0x10) s->write('0');
     s->print(ds_addr[i], HEX);
   }
-  s->print(F("\r\npasswd:"));
   s->setTimeout(10000);
-  passwd = s->parseInt();
-  s->println();
-  if (client)
-    while (client.available()) client.read();
-  while (Serial.available()) Serial.read();
-
-  if (passwd != password) return;
+  password = eeprom_read_u32(PASSWD0);
+  if (password != 0) {
+    s->print(F("\r\npasswd:"));
+    passwd = s->parseInt();
+    if (client)
+      s_clean(&client);
+    s_clean(&Serial);
+    if (passwd != password) {
+      s->println();
+      return;
+    }
+  }
+  s->print(F("\r\nip="));
+  s->print(Ethernet.localIP());
   while (1) {
-    while (s->available()) s->read();
+    s_clean(s);
     s->print(F("\r\n============Vout:"));
     if (digitalRead(_24V_OUT) == HIGH) s->println(F("On"));
     else s->println(F("Off"));
     if (stype != S_SERIAL)
       s->println(F("0-com shell"));
-    s->println(F("1-reset (300ms)\r\n"
-                 "2-powerdown(5s)\r\n"
-                 "3-Vout off\r\n"
-                 "4-Vout on\r\n"
-                 "5-setpasswd\r\n"
-                 "6-com speed calibration\r\n"
-                 "7-network info &  modi\r\n"
-                 "8-restore default sets\r\n"
-                 "9-reboot\r\n"
+    s->print(F("1-reset (300ms)\r\n"
+               "2-powerdown(5 sec)\r\n"
+               "3-set Vout to "));
+    if (digitalRead(_24V_OUT) == HIGH) s->print(F("Off"));
+    else s->print(F("On"));
+    s->print(F("(3 sec)\r\n"
+               "4-set Vout to "));
+    if (digitalRead(_24V_OUT) == HIGH) s->println(F("Off"));
+    else s->println(F("On"));
+    s->println(F("5-setpasswd\r\n"
+                 "6-network info &  modi\r\n"
+                 "7-com set\r\n"
+                 "8-reboot\r\n"
+                 "9-restore default set\r\n"
+                 "a-com speed calibration\r\n"
+                 "b-com speed test\r\n"
                  "q-quit"));
     if (s->readBytes(&ch, 1) != 1) return;
     switch (ch) {
@@ -282,34 +337,48 @@ void menu( uint8_t  stype) {
         break;
       case '3':
         s->write(ch);
-        digitalWrite(_24V_OUT, LOW);
-        eeprom_write(VOUT_SET, LOW);
-        set_rom_check();
+        digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
+        s->print(F("\r\nVout="));
+        s->print(digitalRead(_24V_OUT));
+        delay(3000);
+        digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
+        s->print(F("\r\nVout="));
+        s->println(digitalRead(_24V_OUT));
+        delay(1000);
+        s_clean(s);
         break;
       case '4':
         s->write(ch);
-        digitalWrite(_24V_OUT, HIGH);
-        eeprom_write(VOUT_SET, HIGH);
+        digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
+        eeprom_write(VOUT_SET, digitalRead(_24V_OUT));
         set_rom_check();
         break;
       case '5':
         set_passwd(s);
         break;
       case '6':
-        rc_calibration(stype);
-        break;
-      case '7':
         info(stype);
         break;
-      case '8':
-        eeprom_write(ROMCRC, eeprom_read(ROMCRC) + 1);
+      case '7':
+        set_com_speed(s);
+        break;
       case '9':
-        dogcount = 99999;
-        while (1) ;
+        eeprom_write(ROMCRC, eeprom_read(ROMCRC) + 1);
+      case '8':
+        OSCCAL = osc;
+        asm volatile ("  jmp 0"); //重启
+        break;
+      case 'a':
+      case 'A':
+        rc_calibration(stype);
+        break;
+      case 'b':
+      case 'B':
+        displaybz();
         break;
       case 'q':
       case 'Q':
-        while (s->available()) s->read();
+        s_clean(s);
         return;
     }
   }
@@ -331,7 +400,6 @@ void ds1820() {
     return;
   }
 
-  // the first ROM byte indicates which chip
   switch (addr[0]) {
     case 0x10:
       type_s = 1;
@@ -351,7 +419,6 @@ void ds1820() {
   ds.write(0x44, 1);        // start conversion, with parasite power on at the end
 
   delay(1000);     // maybe 750ms is enough, maybe not
-  // we might do a ds.depower() here, but the reset will take care of it.
 
   present = ds.reset();
   ds.select(addr);
@@ -386,7 +453,7 @@ void check_rom() {
   if (ch != 0) {
     Serial.println(F("sets error!"));
     //set default
-    sets[RC_CAL] = osc + 5;
+    osc + 5;
     if (ds_addr[0] != 0) {
       sets[MAC0] = ds_addr[2];
       sets[MAC1] = ds_addr[3];
@@ -402,6 +469,7 @@ void check_rom() {
       sets[MAC4] = 1;
       sets[MAC5] = 0x25;
     }
+    sets[IS_DHCP] = 'Y';
     sets[IP0] = 192;
     sets[IP1] = 168;
     sets[IP2] = 1;
@@ -414,9 +482,13 @@ void check_rom() {
     sets[GW1] = 168;
     sets[GW2] = 1;
     sets[GW3] = 1;
-    sets[SPEED] = 0;
-    sets[COMSET_H] = 0x08;
-    sets[COMSET_L] = 1;
+    sets[SPEED0] = 115200 >> 24;
+    sets[SPEED1] = 115200 >> 16;
+    sets[SPEED2] = 115200 >> 8;
+    sets[SPEED3] = 115200;
+    sets[DATA_LEN] = '8';
+    sets[DATA_PARI] = 'N';
+    sets[STOP_LEN] = '1';
     sets[PASSWD0] = 0;
     sets[PASSWD1] = 0;
     sets[PASSWD2] = 0;
@@ -438,36 +510,36 @@ void set_rom_check() {
   eeprom_write(ROMCRC, 0 - ch);
 }
 void set_passwd(Stream *s) {
-  uint32_t passwd;
-  while (s->available()) s->read();
-  s->print(F("current password:"));
-  passwd = s->parseInt();
-  s->println();
-  if (passwd != password) {
-    s->println(F("bye!"));
-    return;
+  uint32_t passwd, password;
+  s_clean(s);
+  password = eeprom_read_u32(PASSWD0);
+  if (password > 0) {
+    s->print(F("current password:"));
+    passwd = s->parseInt();
+    s->println();
+    if (passwd != password) {
+      s->println(F("bye!"));
+      return;
+    }
   }
-  while (s->available()) s->read();
+  s_clean(s);
   s->print(F("New password:"));
   passwd = s->parseInt();
   s->println();
-  while (s->available()) s->read();
+  s_clean(s);
   s->print(F("Retype new passwd:"));
   if (passwd != s->parseInt()) {
     s->println(F("\r\nerror"));
     return;
   }
   s->println();
-  eeprom_write(PASSWD0, (uint8_t)(passwd & 0xff));
-  eeprom_write(PASSWD1, (uint8_t)((passwd >> 8) & 0xff));
-  eeprom_write(PASSWD2, (uint8_t)((passwd >> 16) & 0xff));
-  eeprom_write(PASSWD3, (uint8_t)((passwd >> 24) & 0xff));
 
+  eeprom_write_u32(PASSWD0, passwd);
   set_rom_check();
 }
 
 //校准rc振荡器
-bool rc_calibration(uint8_t stype) {
+void rc_calibration(uint8_t stype) {
   uint8_t osc0 = OSCCAL;
   int8_t i, i0;
   uint8_t ch;
@@ -478,53 +550,55 @@ bool rc_calibration(uint8_t stype) {
     client.println(F("\r\nOn the serial console, Press the 'U' key and hold...."));
     client.flush();
   }
-  while (Serial.available()) Serial.read();
+  s_clean(&Serial);
   while (Serial.available() < 10) ;
-  while (Serial.available()) Serial.read();
+  s_clean(&Serial);
   uint8_t b = 0;
   while (b == 0) {
     for (i = -20; i < 20; i++) {
       OSCCAL = osc + i;
-      while (Serial.available()) Serial.read();
+      s_clean(&Serial);
       Serial.readBytes(&ch, 1);
       if (ch == 'U' || ch == 'u') {
-        OSCCAL = osc0;
-        i0 = i;
-        b = 1;
-        break;
+        delay(100);
+        s_clean(&Serial);
+        Serial.readBytes(&ch, 1);
+        if (ch == 'U' || ch == 'u') {
+          i0 = i;
+          b = 1;
+          break;
+        }
       }
     }
   }
   while (b == 1) {
     for (i = i0; i < 20; i++) {
       OSCCAL = osc + i;
-
-      while (Serial.available()) Serial.read();
+      s_clean(&Serial);
       Serial.readBytes(&ch, 1);
       if (ch != 'u' &&  ch != 'U') {
-        b = 2;
-        ch = (i - i0) / 2;
-        OSCCAL = osc + ch;
-        eeprom_write(RC_CAL, osc + ch);
-        set_rom_check();
-        Serial.print(F("ok! calibration="));
-        Serial.println(OSCCAL);
-        if (stype != S_SERIAL) {
-          client.print(F("ok! calibration="));
-          client.println(OSCCAL);
-        }
-        while (1) {
+        delay(100);
+        s_clean(&Serial);
+        Serial.readBytes(&ch, 1);
+        if (ch != 'U' && ch != 'u') {
+          i = ( i - i0) / 2 + i0;
+          OSCCAL = osc + i ;
+          eeprom_write(RC_CAL, osc + i);
+          set_rom_check();
+          Serial.print(F("ok! calibration="));
+          Serial.println(OSCCAL);
+          if (stype != S_SERIAL) {
+            client.print(F("ok! calibration="));
+            client.println(OSCCAL);
+          }
           delay(1000);
-          if (!Serial.available()) break;
-          while (Serial.available()) Serial.read();
+          return;
         }
-        return true;
       }
-
     }
   }
   OSCCAL = osc0;
-  return false;
+  return ;
 }
 
 void info(uint8_t stype) {
@@ -537,12 +611,14 @@ void info(uint8_t stype) {
     s = &client;
   while (1) {
     s->println(F("\r\n============"));
-    s->print(F("1.MAC:"));
+    s->print(F("0.MAC:"));
     for (i = 0; i < 6; i++) {
       ch = eeprom_read(MAC0 + i);
       if (ch < 0x10)  s->write('0');
       s->print(ch, HEX);
     }
+    s->print(F("\r\n1.DHCP:"));
+    s->write(eeprom_read(IS_DHCP));
     s->print(F("\r\n2.IP:"));
     for (i = 0; i < 4; i++) {
       ch = eeprom_read(IP0 + i);
@@ -557,7 +633,6 @@ void info(uint8_t stype) {
       if (i < 3)
         s->write('.');
     }
-
     s->print(F("\r\n4.GETWAY:"));
     for (i = 0; i < 4; i++) {
       ch = eeprom_read(GW0 + i);
@@ -566,15 +641,24 @@ void info(uint8_t stype) {
     }
     s->println(F("\r\nplease select(1-4,q):"));
     dogcount = 0;
+    s_clean(s);
     if (s->readBytes(&ch, 1) != 1) {
       s->println(F("bye!"));
       return;
     }
     switch (ch) {
-      case '1':
+      case '0':
         s->println(F("todo..."));
-        while (s->available()) s->read();
-        s->read();
+        s_clean(s);
+        s->readBytes(&ch, 1);
+        break;
+      case '1':
+        if (eeprom_read(IS_DHCP) == 'Y')
+          eeprom_write(IS_DHCP, 'N');
+        else
+          eeprom_write(IS_DHCP, 'Y');
+        set_rom_check();
+        s_clean(s);
         break;
       case '2':
         s->println(F("please input ip:"));
@@ -613,4 +697,121 @@ void save_set(uint16_t addr,  Stream *s) {
   s->println(ch);
   eeprom_write(addr + 3, ch);
   set_rom_check();
+}
+void set_com_speed(Stream *s) {
+  uint8_t ch;
+  uint32_t speed1;
+  s->print(F("current speed:"));
+  s->println(eeprom_read_u32(SPEED0));
+  s->print(F("please input new speed:"));
+  s_clean(s);
+  speed1 = s->parseInt();
+  s->println(speed1);
+  eeprom_write_u32(SPEED0, speed1);
+  s_clean(s);
+  s->print(F("data len(5-8):"));
+  ch = s->parseInt();
+  if (ch >= 5 && ch <= 8) ch = ch + '0';
+  if (ch < '5' ||  ch > '8') ch = '8';
+  eeprom_write(DATA_LEN, ch);
+  s_clean(s);
+  s->print(F("\r\nParity(N,O,E):"));
+  s->readBytes(&ch, 1);
+  if (ch == 'o') ch = 'N';
+  if (ch == 'e') ch = 'E';
+  if (ch != 'O' && ch != 'E') ch = 'N';
+  eeprom_write(DATA_PARI, ch);
+  s_clean(s);
+  s->print(F("\r\nstop len(1,2):"));
+  s->readBytes(&ch, 1);
+  if (ch != '2') ch = '1';
+  eeprom_write(STOP_LEN, ch);
+  set_rom_check();
+  s->print(F("set speed ok, "));
+  s->print(eeprom_read_u32(SPEED0));
+  s->write(' ');
+  s->write(eeprom_read(DATA_LEN));
+  s->write(eeprom_read(DATA_PARI));
+  s->write(eeprom_read(STOP_LEN));
+  s->println();
+  s_clean(s);
+}
+
+uint8_t get_comset() {
+  switch (eeprom_read(DATA_PARI)) {
+    case 'N':
+      if (eeprom_read(STOP_LEN) == '1') {
+        switch (eeprom_read(DATA_LEN)) {
+          case '5': return SERIAL_5N1;//0x00
+          case '6': return SERIAL_6N1;//0x02
+          case '7': return SERIAL_7N1;//0x04
+          case '8': return SERIAL_8N1;//0x06
+        }//switch DATA_LEN
+      } else {//if stop_len
+        switch (eeprom_read(DATA_LEN)) {
+          case '5': return SERIAL_5N2;//0x08
+          case '6': return SERIAL_6N2;//0x0A
+          case '7': return SERIAL_7N2;//0x0C
+          case '8': return SERIAL_8N2;//0x0E
+        } //switch DATA_LEN
+      }//if stop_len
+      break;
+    case 'E':
+      if (eeprom_read(STOP_LEN) == '1') {
+        switch (eeprom_read(DATA_LEN)) {
+          case '5': return SERIAL_5E1;//0x20
+          case '6': return SERIAL_6E1;//0x22
+          case '7': return SERIAL_7E1;//0x24
+          case '8': return SERIAL_8E1;//0x26
+        }//switch data_len
+      } else { //if stop len
+        switch (eeprom_read(DATA_LEN)) {
+          case '5': return SERIAL_5E2;//0x28
+          case '6': return SERIAL_6E2;//0x2A
+          case '7': return SERIAL_7E2;//0x2C
+          case '8': return SERIAL_8E2;//0x2E
+        }//switch data len
+      }//if stop len
+      break;
+    case 'O':
+      if (eeprom_read(STOP_LEN) == '1') {
+        switch (eeprom_read(DATA_LEN)) {
+          case '5': return SERIAL_5O1;//0x30
+          case '6': return SERIAL_6O1;//0x32
+          case '7': return SERIAL_7O1;//0x34
+          case '8': return SERIAL_8O1;//0x36
+        }
+      } else {//if stop len
+        switch (eeprom_read(DATA_LEN)) {
+          case '5': return SERIAL_5O2;//0x38
+          case '6': return SERIAL_6O2;//0x3A
+          case '7': return SERIAL_7O2;//0x3C
+          case '8': return SERIAL_8O2;//0x3E
+        } //switch data len
+      } //if stop len
+      break;
+  }//switch pari
+  return SERIAL_8N1;
+}
+void s_clean(Stream * s) {
+  delay(10);
+  while (s->available()) s->read();
+}
+void displaybz() {
+  uint8_t osc0, osc1;
+  osc0 = OSCCAL;
+  osc1 = eeprom_read(RC_CAL);
+  for (int8_t i = -50; i < 50; i++) {
+    OSCCAL = osc1 + i;
+    delay(10);
+    Serial.print(F("UUUU,OSCCAL="));
+    Serial.println(OSCCAL);
+    Serial.flush();
+  }
+  if (client) {
+    client.print(F("please input OSCCAL calibration  value:"));
+    eeprom_write(RC_CAL, client.parseInt());
+    set_rom_check();
+  }
+  OSCCAL = osc0;
 }
