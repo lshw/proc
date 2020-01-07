@@ -11,7 +11,7 @@
 #include <SPI.h>
 #include <Ethernet2.h>
 #include <OneWire.h>
-#define EEPROM_OFFSET 13
+#define EEPROM_OFFSET 12
 //eeprom 内存分配
 float celsius;//温度
 boolean alreadyConnected = false;
@@ -52,7 +52,10 @@ OneWire ds(DS);
 
 enum
 {
-  RC_CAL,
+  CAL38400,
+  CAL57600,
+  CAL115200,
+  CAL230400,
   VOUT_SET,
   MAC0,
   MAC1,
@@ -91,6 +94,17 @@ enum
 
 EthernetServer server(23);
 uint8_t osc;
+uint8_t get_cal(uint32_t speedx) {
+  switch (speedx) {
+    case 38400: return CAL38400;
+    case 57600: return CAL57600;
+    case 115200: return CAL115200;
+    case 230400: return CAL230400;
+    default:
+      if (speedx > 230400) return CAL230400;
+      return CAL38400;
+  }
+}
 void setup() {
   byte mac[6];
   pinMode(_24V_OUT, OUTPUT);
@@ -106,18 +120,14 @@ void setup() {
   osc = OSCCAL;
   ds1820();
   check_rom();
-  OSCCAL = eeprom_read(RC_CAL);
   uint32_t com_speed = eeprom_read_u32(SPEED0);
+  OSCCAL = eeprom_read(get_cal(com_speed));
   if (com_speed == 0) com_speed = 115200;
   uint8_t com_set = get_comset();
   Serial.begin(com_speed, com_set);
   while (!Serial) ;
   Serial.write('#');
-  Serial.print(com_speed);
-  Serial.print(F(","));
-  Serial.write(eeprom_read(DATA_LEN));
-  Serial.write(eeprom_read(DATA_PARI));
-  Serial.println((char)eeprom_read(STOP_LEN));
+  disp_comset(&Serial);
   digitalWrite(_24V_OUT, eeprom_read(VOUT_SET));
   for (uint8_t i = 0; i < 6; i++)
     mac[i] = eeprom_read(MAC0 + i);
@@ -127,7 +137,7 @@ void setup() {
 
   if (eeprom_read(IS_DHCP) == 'N' ||  Ethernet.begin(mac) == 0)
     Ethernet.begin(mac, ip, gateway, subnet); //dhcp==N 或者dhcp获取失败
-  Serial.print(F("#ip:"));
+  Serial.print(F("\r\n#ip:"));
   Serial.println(Ethernet.localIP());
   server.begin();
   setup_watchdog(WDTO_30MS);
@@ -305,21 +315,21 @@ void menu( uint8_t  stype) {
     if (stype != S_SERIAL)
       s->println(F("0-com shell"));
     s->print(F("1-reset (300ms)\r\n"
-               "2-powerdown(5 sec)\r\n"
-               "3-set Vout to "));
+               "2-powerdown(300ms)\r\n"
+               "3-powerdown(5 sec)\r\n"
+               "4-set Vout to "));
     if (digitalRead(_24V_OUT) == HIGH) s->print(F("Off"));
     else s->print(F("On"));
     s->print(F("(3 sec)\r\n"
-               "4-set Vout to "));
+               "5-set Vout to "));
     if (digitalRead(_24V_OUT) == HIGH) s->println(F("Off"));
     else s->println(F("On"));
-    s->println(F("5-setpasswd\r\n"
-                 "6-network info &  modi\r\n"
-                 "7-com set\r\n"
-                 "8-reboot\r\n"
-                 "9-restore default set\r\n"
-                 "a-com speed calibration\r\n"
-                 "b-com speed test\r\n"
+    s->println(F("6-setpasswd\r\n"
+                 "7-network info &  modi\r\n"
+                 "8-com set\r\n"
+                 "9-com speed calibration\r\n"
+                 "a-reboot\r\n"
+                 "b-restore default set\r\n"
                  "q-quit"));
     if (s->readBytes(&ch, 1) != 1) return;
     switch (ch) {
@@ -333,9 +343,13 @@ void menu( uint8_t  stype) {
         break;
       case '2':
         s->write(ch);
-        pc_power_on = 5000;
+        pc_power_on = 300;
         break;
       case '3':
+        s->write(ch);
+        pc_power_on = 5000;
+        break;
+      case '4':
         s->write(ch);
         digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
         s->print(F("\r\nVout="));
@@ -347,34 +361,31 @@ void menu( uint8_t  stype) {
         delay(1000);
         s_clean(s);
         break;
-      case '4':
+      case '5':
         s->write(ch);
         digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
         eeprom_write(VOUT_SET, digitalRead(_24V_OUT));
         set_rom_check();
         break;
-      case '5':
+      case '6':
         set_passwd(s);
         break;
-      case '6':
+      case '7':
         info(stype);
         break;
-      case '7':
+      case '8':
         set_com_speed(s);
         break;
       case '9':
-        eeprom_write(ROMCRC, eeprom_read(ROMCRC) + 1);
-      case '8':
-        OSCCAL = osc;
-        asm volatile ("  jmp 0"); //重启
-        break;
-      case 'a':
-      case 'A':
         rc_calibration(stype);
         break;
       case 'b':
       case 'B':
-        displaybz();
+        eeprom_write(ROMCRC, eeprom_read(ROMCRC) + 1);
+      case 'a':
+      case 'A':
+        OSCCAL = osc;
+        asm volatile ("  jmp 0"); //重启
         break;
       case 'q':
       case 'Q':
@@ -448,12 +459,12 @@ void ds1820() {
 void check_rom() {
   uint8_t ch = 0, i;
   uint8_t sets[ROMLEN];
-  for (i = 0; i < ROMLEN; i++)
-    ch += eeprom_read(i);
+  for (i = 0; i < ROMLEN; i++) {
+    sets[i] = eeprom_read(i);
+    ch += sets[i];
+  }
   if (ch != 0) {
-    Serial.println(F("sets error!"));
     //set default
-    osc + 5;
     if (ds_addr[0] != 0) {
       sets[MAC0] = ds_addr[2];
       sets[MAC1] = ds_addr[3];
@@ -469,7 +480,13 @@ void check_rom() {
       sets[MAC4] = 1;
       sets[MAC5] = 0x25;
     }
-    sets[IS_DHCP] = 'Y';
+    if (sets[CAL115200] == 0 || sets[CAL115200] == 0xff) {
+      sets[CAL38400] = osc - 1;
+      sets[CAL57600] = osc - +1;
+      sets[CAL115200] = osc + 5;
+      sets[CAL230400] = osc - 10;
+    }
+    sets[IS_DHCP] = 'N';
     sets[IP0] = 192;
     sets[IP1] = 168;
     sets[IP2] = 1;
@@ -482,10 +499,10 @@ void check_rom() {
     sets[GW1] = 168;
     sets[GW2] = 1;
     sets[GW3] = 1;
-    sets[SPEED0] = 115200 >> 24;
-    sets[SPEED1] = 115200 >> 16;
-    sets[SPEED2] = 115200 >> 8;
-    sets[SPEED3] = 115200;
+    sets[SPEED0] = 38400 >> 24;
+    sets[SPEED1] = 38400 >> 16;
+    sets[SPEED2] = 38400 >> 8;
+    sets[SPEED3] = 38400;
     sets[DATA_LEN] = '8';
     sets[DATA_PARI] = 'N';
     sets[STOP_LEN] = '1';
@@ -540,16 +557,35 @@ void set_passwd(Stream *s) {
 
 //校准rc振荡器
 void rc_calibration(uint8_t stype) {
-  uint8_t osc0 = OSCCAL;
+  uint8_t osc1, osc0 = OSCCAL;
+  uint8_t oscs[256];
   int8_t i, i0;
   uint8_t ch;
-  if (stype == S_SERIAL) {
-    Serial.println(F("\r\nOn the serial console, Press the 'U' key and hold...."));
-    Serial.flush();
-  } else {
-    client.println(F("\r\nOn the serial console, Press the 'U' key and hold...."));
-    client.flush();
-  }
+  uint32_t com_speed;
+  Stream *s;
+  memset(oscs, 0, sizeof(oscs));
+  if (stype == S_SERIAL)
+    s = &Serial;
+  else
+    s = &client;
+  com_speed = eeprom_read_u32(SPEED0);
+  s->print(F("osc="));
+  s->print(osc);
+  s->print(F(",CAL38400="));
+  s->print(eeprom_read(CAL38400));
+  s->print(F(",CAL57600="));
+  s->print(eeprom_read(CAL57600));
+  s->print(F(",CAL115200="));
+  s->print(eeprom_read(CAL115200));
+  s->print(F(",CAL230400="));
+  s->println(eeprom_read(CAL230400));
+
+  s->print(F("\r\nOn the Serial console("));
+  disp_comset(s);
+  s->println(F("), Press the 'U' key and hold...."));
+  s->flush();
+  uint8_t com_set = get_comset();
+  Serial.begin(com_speed, com_set);
   s_clean(&Serial);
   while (Serial.available() < 10) ;
   s_clean(&Serial);
@@ -583,17 +619,29 @@ void rc_calibration(uint8_t stype) {
         if (ch != 'U' && ch != 'u') {
           i = ( i - i0) / 2 + i0;
           OSCCAL = osc + i ;
-          eeprom_write(RC_CAL, osc + i);
+          eeprom_write(get_cal(com_speed), osc + i);
           set_rom_check();
           Serial.print(F("ok! calibration="));
           Serial.println(OSCCAL);
           if (stype != S_SERIAL) {
             client.print(F("ok! calibration="));
             client.println(OSCCAL);
+            client.print(osc);
+            if (OSCCAL > osc) {
+              client.write('+');
+              client.println(OSCCAL - osc);
+            } else {
+              client.write('-');
+              client.println(osc - OSCCAL);
+            }
           }
           delay(1000);
           return;
         }
+      }
+      if (client) {
+        client.println(OSCCAL);
+        oscs[OSCCAL] = 1;
       }
     }
   }
@@ -705,38 +753,63 @@ void set_com_speed(Stream *s) {
   s->println(eeprom_read_u32(SPEED0));
   s->print(F("please input new speed:"));
   s_clean(s);
-  speed1 = s->parseInt();
-  s->println(speed1);
-  eeprom_write_u32(SPEED0, speed1);
+  speed1 = s->parseInt(SKIP_NONE, 0xa);
+  if (speed1 >= 10) {
+    if (speed1 > 600000)   speed1 = 921600;
+    else if (speed1 > 300000) speed1 = 460800;
+    else if (speed1 > 180000) speed1 = 230400;
+    else if (speed1 > 70000) speed1 = 115200;
+    else if (speed1 > 48000) speed1 = 57600;
+    else if (speed1 > 28800) speed1 = 38400;
+    else if (speed1 > 14400) speed1 = 19200;
+    else if (speed1 > 7200) speed1 = 9600;
+    else if (speed1 > 3600) speed1 = 4800;
+    else if (speed1 > 1800) speed1 = 2400;
+    else if (speed1 > 900) speed1 = 1200;
+    else if (speed1 > 450) speed1 = 600;
+    else speed1 = 300;
+    s->println(speed1);
+    eeprom_write_u32(SPEED0, speed1);
+    set_rom_check();
+  }
   s_clean(s);
   s->print(F("data len(5-8):"));
-  ch = s->parseInt();
-  if (ch >= 5 && ch <= 8) ch = ch + '0';
-  if (ch < '5' ||  ch > '8') ch = '8';
-  eeprom_write(DATA_LEN, ch);
+  if (s->readBytes(&ch, 1) == 1)
+    if (ch >= '5' &&  ch <= '8') {
+      eeprom_write(DATA_LEN, ch);
+      set_rom_check();
+    }
+  delay(100);
   s_clean(s);
   s->print(F("\r\nParity(N,O,E):"));
   s->readBytes(&ch, 1);
-  if (ch == 'o') ch = 'N';
+  if (ch == 'o') ch = 'O';
   if (ch == 'e') ch = 'E';
-  if (ch != 'O' && ch != 'E') ch = 'N';
-  eeprom_write(DATA_PARI, ch);
+  if (ch == 'n') ch = 'N';
+  if (ch == 'O' || ch == 'E' || ch == 'N') {
+    eeprom_write(DATA_PARI, ch);
+    set_rom_check();
+  }
   s_clean(s);
   s->print(F("\r\nstop len(1,2):"));
   s->readBytes(&ch, 1);
-  if (ch != '2') ch = '1';
-  eeprom_write(STOP_LEN, ch);
-  set_rom_check();
+  if (ch == '2' || ch == '1') {
+    eeprom_write(STOP_LEN, ch);
+    set_rom_check();
+  }
   s->print(F("set speed ok, "));
+  disp_comset(s);
+  s->println();
+  s_clean(s);
+  check_rom();
+}
+void disp_comset(Stream *s) {
   s->print(eeprom_read_u32(SPEED0));
-  s->write(' ');
+  s->write(',');
   s->write(eeprom_read(DATA_LEN));
   s->write(eeprom_read(DATA_PARI));
   s->write(eeprom_read(STOP_LEN));
-  s->println();
-  s_clean(s);
 }
-
 uint8_t get_comset() {
   switch (eeprom_read(DATA_PARI)) {
     case 'N':
@@ -796,22 +869,4 @@ uint8_t get_comset() {
 void s_clean(Stream * s) {
   delay(10);
   while (s->available()) s->read();
-}
-void displaybz() {
-  uint8_t osc0, osc1;
-  osc0 = OSCCAL;
-  osc1 = eeprom_read(RC_CAL);
-  for (int8_t i = -50; i < 50; i++) {
-    OSCCAL = osc1 + i;
-    delay(10);
-    Serial.print(F("UUUU,OSCCAL="));
-    Serial.println(OSCCAL);
-    Serial.flush();
-  }
-  if (client) {
-    client.print(F("please input OSCCAL calibration  value:"));
-    eeprom_write(RC_CAL, client.parseInt());
-    set_rom_check();
-  }
-  OSCCAL = osc0;
 }
