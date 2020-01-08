@@ -87,7 +87,17 @@ enum
   PASSWD1,
   PASSWD2,
   PASSWD3,
-  ROM_NC,
+  WATCHDOG_EN,
+  WATCHDOG0,//r reset300ms
+  WATCHDOG1,//w wait300ms
+  WATCHDOG2,//P power 5 sec
+  WATCHDOG3,//W water 5 sec
+  WATCHDOG4,//o Vout off
+  WATCHDOG5,//w
+  WATCHDOG6,//O Vout on
+  WATCHDOG7,
+  WATCHDOG8,
+  WATCHDOG9,
   ROMCRC,
   ROMLEN
 };
@@ -324,13 +334,21 @@ void menu( uint8_t  stype) {
                "5-set Vout to "));
     if (digitalRead(_24V_OUT) == HIGH) s->println(F("Off"));
     else s->println(F("On"));
-    s->println(F("6-setpasswd\r\n"
-                 "7-network info &  modi\r\n"
-                 "8-com set\r\n"
-                 "9-com speed calibration\r\n"
-                 "a-reboot\r\n"
-                 "b-restore default set\r\n"
-                 "q-quit"));
+    s->print(F("6-setpasswd\r\n"
+               "7-network info &  modi\r\n"
+               "8-com set\r\n"
+               "9-com speed calibration\r\n"
+               "a-reboot\r\n"
+               "b-restore default set\r\n"
+               "c-watchdog set:"));
+    s->println((char) eeprom_read(WATCHDOG_EN));
+    s->print(F("d-watchdog script set:"));
+    for (uint8_t i = WATCHDOG0; i <= WATCHDOG9; i++) {
+      ch = eeprom_read(i);
+      if (ch < 0x20 || ch > ('z' | 0x20)) break;
+      s->write(ch);
+    }
+    s->println(F("\r\nq-quit"));
     if (s->readBytes(&ch, 1) != 1) return;
     switch (ch) {
       case '0':
@@ -386,6 +404,49 @@ void menu( uint8_t  stype) {
       case 'A':
         OSCCAL = osc;
         asm volatile ("  jmp 0"); //重启
+        break;
+      case 'c':
+      case 'C':
+        s->print(F("input watchdog set[No,Min,Hour,Day]:"));
+        s_clean(s);
+        if (s->readBytes(&ch, 1) == 1) {
+          ch &= ~0x20; //a-z->A-Z
+          switch (ch) {
+            case 'N':
+            case 'M':
+            case 'H':
+            case 'D':
+              s->write(ch);
+              eeprom_write(WATCHDOG_EN, ch);
+              set_rom_check();
+          }
+        }
+        break;
+      case 'd':
+      case 'D':
+        s->print(F("please input watchdog scripts:"));
+        uint8_t i;
+        i = 0;
+        while (1) {
+          ch = s->read();
+          if (ch == 0xd || ch == 0xa) break;
+          switch (ch) {
+            case 'r':
+            case 'R':
+            case 'p':
+            case 'P':
+            case 'o':
+            case 'O':
+            case 'w':
+            case 'W':
+              s->write(ch);
+              eeprom_write(WATCHDOG0 + i, ch);
+              eeprom_write(WATCHDOG0 + i + 1, 0xff);
+              i++;
+              if (i >= 10) break;
+          }
+          set_rom_check();
+        }
         break;
       case 'q':
       case 'Q':
@@ -510,7 +571,7 @@ void check_rom() {
     sets[PASSWD1] = 0;
     sets[PASSWD2] = 0;
     sets[PASSWD3] = 0;
-    sets[ROM_NC] = 0;
+    sets[WATCHDOG_EN] = 'N';
     ch = 0;
     for (i = 0; i < ROMLEN; i++) {
       ch += sets[i];
