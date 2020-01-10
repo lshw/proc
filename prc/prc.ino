@@ -87,7 +87,6 @@ enum
   PASSWD1,
   PASSWD2,
   PASSWD3,
-  WATCHDOG_EN,
   WATCHDOG0,//r reset300ms
   WATCHDOG1,//w wait300ms
   WATCHDOG2,//P power 5 sec
@@ -98,6 +97,8 @@ enum
   WATCHDOG7,
   WATCHDOG8,
   WATCHDOG9,
+  WATCHDOG10,
+  WATCHDOG_EN, //开启watchdog功能
   ROMCRC,
   ROMLEN
 };
@@ -295,17 +296,19 @@ void menu( uint8_t  stype) {
     s = &Serial;
   else
     s = &client;
-  s->print(F("C="));
-  s->println(celsius);
   s->print(F("SN="));
   for (uint8_t i = 0; i < sizeof(ds_addr); i++) {
     if (ds_addr[i] < 0x10) s->write('0');
     s->print(ds_addr[i], HEX);
   }
+  s->print(F("\r\ncom="));
+  disp_comset(s);
+  s->print(F("\r\nC="));
+  s->println(celsius);
   s->setTimeout(10000);
   password = eeprom_read_u32(PASSWD0);
   if (password != 0) {
-    s->print(F("\r\npasswd:"));
+    s->print(F("passwd:"));
     passwd = s->parseInt();
     if (client)
       s_clean(&client);
@@ -315,7 +318,7 @@ void menu( uint8_t  stype) {
       return;
     }
   }
-  s->print(F("\r\nip="));
+  s->print(F("ip="));
   s->print(Ethernet.localIP());
   while (1) {
     s_clean(s);
@@ -324,9 +327,9 @@ void menu( uint8_t  stype) {
     else s->println(F("Off"));
     if (stype != S_SERIAL)
       s->println(F("0-com shell"));
-    s->print(F("1-reset (300ms)\r\n"
-               "2-powerdown(300ms)\r\n"
-               "3-powerdown(5 sec)\r\n"
+    s->print(F("r-reset (300ms)\r\n"
+               "p-powerdown(300ms)\r\n"
+               "P-powerdown(5 sec)\r\n"
                "4-set Vout to "));
     if (digitalRead(_24V_OUT) == HIGH) s->print(F("Off"));
     else s->print(F("On"));
@@ -343,7 +346,7 @@ void menu( uint8_t  stype) {
                "c-watchdog set:"));
     s->println((char) eeprom_read(WATCHDOG_EN));
     s->print(F("d-watchdog script set:"));
-    for (uint8_t i = WATCHDOG0; i <= WATCHDOG9; i++) {
+    for (uint8_t i = WATCHDOG0; i <= WATCHDOG10; i++) {
       ch = eeprom_read(i);
       if (ch < 0x20 || ch > ('z' | 0x20)) break;
       s->write(ch);
@@ -355,20 +358,22 @@ void menu( uint8_t  stype) {
         if (stype != S_SERIAL)
           com_shell();
         break;
-      case '1':
-        s->write(ch);
+      case 'r':
         pc_reset_on = 300;
         break;
-      case '2':
-        s->write(ch);
+      case 'p':
         pc_power_on = 300;
         break;
-      case '3':
-        s->write(ch);
+      case 'P':
         pc_power_on = 5000;
         break;
+      case 'v':
+        digitalWrite(_24V_OUT, LOW);
+        break;
+      case 'V':
+        digitalWrite(_24V_OUT, HIGH);
+        break;
       case '4':
-        s->write(ch);
         digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
         s->print(F("\r\nVout="));
         s->print(digitalRead(_24V_OUT));
@@ -380,7 +385,6 @@ void menu( uint8_t  stype) {
         s_clean(s);
         break;
       case '5':
-        s->write(ch);
         digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
         eeprom_write(VOUT_SET, digitalRead(_24V_OUT));
         set_rom_check();
@@ -443,7 +447,7 @@ void menu( uint8_t  stype) {
               eeprom_write(WATCHDOG0 + i, ch);
               eeprom_write(WATCHDOG0 + i + 1, 0xff);
               i++;
-              if (i >= 10) break;
+              if (i > WATCHDOG_EN - WATCHDOG0) break;
           }
           set_rom_check();
         }
@@ -453,6 +457,7 @@ void menu( uint8_t  stype) {
         s_clean(s);
         return;
     }
+    s->write(ch);
   }
 }
 void ds1820() {
@@ -572,6 +577,14 @@ void check_rom() {
     sets[PASSWD2] = 0;
     sets[PASSWD3] = 0;
     sets[WATCHDOG_EN] = 'N';
+    sets[WATCHDOG0] = 'r';
+    sets[WATCHDOG1] = 'v';
+    sets[WATCHDOG2] = 'p';
+    sets[WATCHDOG3] = 'W';
+    sets[WATCHDOG4] = 'P';
+    sets[WATCHDOG5] = 'V';
+    sets[WATCHDOG6] = 0xff;
+
     ch = 0;
     for (i = 0; i < ROMLEN; i++) {
       ch += sets[i];
