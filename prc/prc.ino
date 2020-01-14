@@ -140,8 +140,12 @@ void setup() {
   Serial.write('#');
   disp_comset(&Serial);
   digitalWrite(_24V_OUT, eeprom_read(VOUT_SET));
-  for (uint8_t i = 0; i < 6; i++)
-    mac[i] = eeprom_read(MAC0 + i);
+  mac[0] = 0xde;
+  mac[1] = 0xad;
+  mac[2] = 0xbe;
+  mac[3] = eeprom_read(MAC3);
+  mac[4] = eeprom_read(MAC4);
+  mac[5] = eeprom_read(MAC5);
   IPAddress ip(eeprom_read(IP0), eeprom_read(IP1), eeprom_read(IP2), eeprom_read(IP3));
   IPAddress gateway(eeprom_read(GW0), eeprom_read(GW1), eeprom_read(GW2), eeprom_read(GW3));
   IPAddress subnet(eeprom_read(NETMARK0), eeprom_read(NETMARK1), eeprom_read(NETMARK2), eeprom_read(NETMARK3));
@@ -209,7 +213,11 @@ void com_shell() {
   s_clean(&client);
   while (1) {
     dogcount = 0;
-    if (!client.connected()) return;
+    if (!client.connected()) {
+      client.stop();
+      alreadyConnected = false;
+      return;
+    }
     while (client.available() > 0) { //tcp有数据进来
       ch = client.read();
       if (ch == 0xd || ch == 0xa) {
@@ -340,7 +348,7 @@ void menu( uint8_t  stype) {
     s->print(F("6-setpasswd\r\n"
                "7-network info &  modi\r\n"
                "8-com set\r\n"
-               "9-com speed calibration\r\n"
+               /*      "9-com speed calibration\r\n" */
                "a-reboot\r\n"
                "b-restore default set\r\n"
                "c-watchdog set:"));
@@ -357,6 +365,7 @@ void menu( uint8_t  stype) {
       case '0':
         if (stype != S_SERIAL)
           com_shell();
+        return;
         break;
       case 'r':
         pc_reset_on = 300;
@@ -531,17 +540,14 @@ void check_rom() {
   }
   if (ch != 0) {
     //set default
+    sets[MAC0] = 0xDE;
+    sets[MAC1] = 0xAD;
+    sets[MAC2] = 0xBE;
     if (ds_addr[0] != 0) {
-      sets[MAC0] = ds_addr[2];
-      sets[MAC1] = ds_addr[3];
-      sets[MAC2] = ds_addr[4];
       sets[MAC3] = ds_addr[5];
       sets[MAC4] = ds_addr[6];
       sets[MAC5] = ds_addr[7];
     } else {
-      sets[MAC0] = 0xDE;
-      sets[MAC1] = 0xAD;
-      sets[MAC2] = 0xBE;
       sets[MAC3] = 0;
       sets[MAC4] = 1;
       sets[MAC5] = 0x25;
