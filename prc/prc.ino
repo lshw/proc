@@ -130,6 +130,11 @@ void setup() {
   digitalWrite(NET_RESET, HIGH);
   osc = OSCCAL;
   ds1820();
+  while (eeprom_read(CAL38400) == 0xff || eeprom_read(CAL38400) == 0) {
+    check_rom();
+    Serial.begin(115200);
+    rc_calibration(&Serial);
+  }
   check_rom();
   uint32_t com_speed = eeprom_read_u32(SPEED0);
   OSCCAL = eeprom_read(get_cal(com_speed));
@@ -207,7 +212,7 @@ void loop() {
 
 void com_shell() {
   char ch, chlen = 0, chs[250];
-
+  add_count=0;
   if (!client.connected()) return;
   s_clean(&Serial);
   s_clean(&client);
@@ -314,16 +319,18 @@ void menu( uint8_t  stype) {
   s->print(F("\r\nC="));
   s->println(celsius);
   s->setTimeout(10000);
-  password = eeprom_read_u32(PASSWD0);
-  if (password != 0) {
-    s->print(F("passwd:"));
-    passwd = s->parseInt();
-    if (client)
-      s_clean(&client);
-    s_clean(&Serial);
-    if (passwd != password) {
-      s->println();
-      return;
+  if ( stype != S_SERIAL) {
+    password = eeprom_read_u32(PASSWD0);
+    if (password != 0) {
+      s->print(F("passwd:"));
+      passwd = s->parseInt();
+      if (client)
+        s_clean(&client);
+      s_clean(&Serial);
+      if (passwd != password) {
+        s->println();
+        return;
+      }
     }
   }
   s->print(F("ip="));
@@ -351,21 +358,27 @@ void menu( uint8_t  stype) {
                /*      "9-com speed calibration\r\n" */
                "a-reboot\r\n"
                "b-restore default set\r\n"
-               "c-watchdog set:"));
-    s->println((char) eeprom_read(WATCHDOG_EN));
-    s->print(F("d-watchdog script set:"));
-    for (uint8_t i = WATCHDOG0; i <= WATCHDOG10; i++) {
+               /*
+                 "c-watchdog set:"*/));
+    /*
+      s->println((char) eeprom_read(WATCHDOG_EN));
+      s->print(F("d-watchdog script set:"));
+      for (uint8_t i = WATCHDOG0; i <= WATCHDOG10; i++) {
       ch = eeprom_read(i);
       if (ch < 0x20 || ch > ('z' | 0x20)) break;
       s->write(ch);
-    }
+      }*/
     s->println(F("\r\nq-quit"));
-    if (s->readBytes(&ch, 1) != 1) return;
+    if (s->readBytes(&ch, 1) != 1) {
+      s->println(F("Bye!"));
+      return;
+    }
     switch (ch) {
       case '0':
-        if (stype != S_SERIAL)
+        if (stype != S_SERIAL) {
           com_shell();
-        return;
+          return;
+        }
         break;
       case 'r':
         pc_reset_on = 300;
@@ -418,49 +431,51 @@ void menu( uint8_t  stype) {
         OSCCAL = osc;
         asm volatile ("  jmp 0"); //重启
         break;
-      case 'c':
-      case 'C':
+      /*
+        case 'c':
+        case 'C':
         s->print(F("input watchdog set[No,Min,Hour,Day]:"));
         s_clean(s);
         if (s->readBytes(&ch, 1) == 1) {
-          ch &= ~0x20; //a-z->A-Z
-          switch (ch) {
-            case 'N':
-            case 'M':
-            case 'H':
-            case 'D':
-              s->write(ch);
-              eeprom_write(WATCHDOG_EN, ch);
-              set_rom_check();
-          }
+        ch &= ~0x20; //a-z->A-Z
+        switch (ch) {
+          case 'N':
+          case 'M':
+          case 'H':
+          case 'D':
+            s->write(ch);
+            eeprom_write(WATCHDOG_EN, ch);
+            set_rom_check();
+        }
         }
         break;
-      case 'd':
-      case 'D':
+        case 'd':
+        case 'D':
         s->print(F("please input watchdog scripts:"));
         uint8_t i;
         i = 0;
         while (1) {
-          ch = s->read();
-          if (ch == 0xd || ch == 0xa) break;
-          switch (ch) {
-            case 'r':
-            case 'R':
-            case 'p':
-            case 'P':
-            case 'o':
-            case 'O':
-            case 'w':
-            case 'W':
-              s->write(ch);
-              eeprom_write(WATCHDOG0 + i, ch);
-              eeprom_write(WATCHDOG0 + i + 1, 0xff);
-              i++;
-              if (i > WATCHDOG_EN - WATCHDOG0) break;
-          }
-          set_rom_check();
+        ch = s->read();
+        if (ch == 0xd || ch == 0xa) break;
+        switch (ch) {
+          case 'r':
+          case 'R':
+          case 'p':
+          case 'P':
+          case 'o':
+          case 'O':
+          case 'w':
+          case 'W':
+            s->write(ch);
+            eeprom_write(WATCHDOG0 + i, ch);
+            eeprom_write(WATCHDOG0 + i + 1, 0xff);
+            i++;
+            if (i > WATCHDOG_EN - WATCHDOG0) break;
+        }
+        set_rom_check();
         }
         break;
+      */
       case 'q':
       case 'Q':
         s_clean(s);
@@ -571,10 +586,10 @@ void check_rom() {
     sets[GW1] = 168;
     sets[GW2] = 1;
     sets[GW3] = 1;
-    sets[SPEED0] = 38400 >> 24;
-    sets[SPEED1] = 38400 >> 16;
-    sets[SPEED2] = 38400 >> 8;
-    sets[SPEED3] = 38400;
+    sets[SPEED0] = 115200 >> 24;
+    sets[SPEED1] = 115200 >> 16;
+    sets[SPEED2] = 115200 >> 8;
+    sets[SPEED3] = 115200;
     sets[DATA_LEN] = '8';
     sets[DATA_PARI] = 'N';
     sets[STOP_LEN] = '1';
@@ -615,7 +630,7 @@ void set_passwd(Stream *s) {
     passwd = s->parseInt();
     s->println();
     if (passwd != password) {
-      s->println(F("bye!"));
+      s->println(F("Bye!"));
       return;
     }
   }
@@ -771,7 +786,7 @@ void info(uint8_t stype) {
     dogcount = 0;
     s_clean(s);
     if (s->readBytes(&ch, 1) != 1) {
-      s->println(F("bye!"));
+      s->println(F("Bye!"));
       return;
     }
     switch (ch) {
