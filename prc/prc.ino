@@ -13,7 +13,8 @@
 #include <OneWire.h>
 #define EEPROM_OFFSET 12
 //eeprom 内存分配
-float celsius;//温度
+//float celsius;//温度
+int16_t celsius[11];
 boolean alreadyConnected = false;
 EthernetClient client;
 uint8_t add_count = 0;
@@ -47,7 +48,7 @@ void eeprom_write_u32(uint16_t addr, uint32_t data) {
 uint8_t goto_bootloader __attribute__ ((section (".noinit"))); //需要进入bootloader
 uint8_t goto_bootloader_crc __attribute__ ((section (".noinit")));
 
-byte ds_addr[8];
+byte ds_addr[11][8];
 OneWire ds(DS);
 
 enum
@@ -87,6 +88,15 @@ enum
   PASSWD1,
   PASSWD2,
   PASSWD3,
+  SN0,
+  SN1,
+  SN2,
+  SN3,
+  SN4,
+  SN5,
+  SN6,
+  SN7,
+  SN8,
   WATCHDOG0,//r reset300ms
   WATCHDOG1,//w wait300ms
   WATCHDOG2,//P power 5 sec
@@ -129,7 +139,8 @@ void setup() {
   pinMode(NET_RESET, OUTPUT);
   digitalWrite(NET_RESET, HIGH);
   osc = OSCCAL;
-  ds1820();
+  ds1820_search();
+  ds1820_all();
   while (eeprom_read(CAL38400) == 0xff || eeprom_read(CAL38400) == 0) {
     check_rom();
     Serial.begin(115200);
@@ -171,8 +182,7 @@ void loop() {
       alreadyConnected = true;
       delay(100);
       s_clean(&client);
-      client.print(F("C="));
-      client.println(celsius);
+      ds1820_disp(&client);
     }
   }
 
@@ -188,7 +198,7 @@ void loop() {
 
   if (timer1 == 0) {
     timer1 = 60; //60秒测温一次
-    ds1820();
+    ds1820_all();
   }
   if (Serial.available() > 0) {
     while (Serial.available()) {
@@ -212,7 +222,7 @@ void loop() {
 
 void com_shell() {
   char ch, chlen = 0, chs[250];
-  add_count=0;
+  add_count = 0;
   if (!client.connected()) return;
   s_clean(&Serial);
   s_clean(&client);
@@ -310,14 +320,15 @@ void menu( uint8_t  stype) {
   else
     s = &client;
   s->print(F("SN="));
-  for (uint8_t i = 0; i < sizeof(ds_addr); i++) {
-    if (ds_addr[i] < 0x10) s->write('0');
-    s->print(ds_addr[i], HEX);
+  for (uint8_t i = 0; i < sizeof(ds_addr[0]); i++) {
+    ch = eeprom_read(SN0 + i);
+    if (ch < 0x10) s->write('0');
+    s->print((uint8_t)ch, HEX);
   }
   s->print(F("\r\ncom="));
   disp_comset(s);
-  s->print(F("\r\nC="));
-  s->println(celsius);
+  s->println();
+  ds1820_disp(s);
   s->setTimeout(10000);
   if ( stype != S_SERIAL) {
     password = eeprom_read_u32(PASSWD0);
@@ -484,58 +495,82 @@ void menu( uint8_t  stype) {
     s->write(ch);
   }
 }
-void ds1820() {
+uint8_t ds1820_count = 0;
+void ds1820_search() {
+  uint8_t i;
+  char * addr;
+  ds.reset_search();
+  delay(250);
+  celsius[0] = -400 * 16; //跳过0号
+  memset(ds_addr, 0, sizeof(ds_addr));
+  for (i = 0; i < 8; i++) ds_addr[0][i] = eeprom_read(SN0 + i);
+  i = 1;
+
+  while (i < 11) {
+    if (!ds.search(ds_addr[i]))  {
+      return;
+    }
+    if (OneWire::crc8(ds_addr[i], 7) != ds_addr[i][7]) {
+      continue;
+    }
+    ds1820_count++;
+    if (ds_addr[i][0] == ds_addr[0][0]
+        && ds_addr[i][1] == ds_addr[0][1]
+        && ds_addr[i][2] == ds_addr[0][2]
+        && ds_addr[i][3] == ds_addr[0][3]
+        && ds_addr[i][4] == ds_addr[0][4]
+        && ds_addr[i][5] == ds_addr[0][5]
+        && ds_addr[i][6] == ds_addr[0][6]
+        && ds_addr[i][7] == ds_addr[0][7]
+       ) {
+      celsius[0] = 0; //存在0号温度探头 ,取消跳过
+      continue; //跳过0号探头
+    }    else {
+      i++;
+    }
+  }
+}
+
+void ds1820_start() {
+  ds.reset();
+  ds.skip();
+  ds.write(0x44, 1);        // start conversion, with parasite power on at the end
+}
+void ds1820_all() {
+  ds1820_start();
+  delay(800);
+  for (uint8_t i = 0; i < 11; i++) {
+    if (ds_addr[i][0] != 0 ) ds1820(i);
+  }
+}
+
+void ds1820(uint8_t n) {
   byte i;
   byte present = 0;
   byte type_s;
   byte *addr;
   byte data[12];
-  addr = ds_addr;
-  if ( !ds.search(addr)) {
-    ds.reset_search();
-    delay(250);
-    return;
-  }
 
-  if (OneWire::crc8(addr, 7) != addr[7]) {
-    return;
-  }
-
-  switch (addr[0]) {
-    case 0x10:
-      type_s = 1;
-      break;
-    case 0x28:
-      type_s = 0;
-      break;
-    case 0x22:
-      type_s = 0;
-      break;
-    default:
-      return;
-  }
-
-  ds.reset();
-  ds.select(addr);
-  ds.write(0x44, 1);        // start conversion, with parasite power on at the end
-
-  delay(1000);     // maybe 750ms is enough, maybe not
-
+  if (celsius[n] < -300 * 16) return;
+  addr = ds_addr[n];
   present = ds.reset();
   ds.select(addr);
   ds.write(0xBE);         // Read Scratchpad
-
+  if (OneWire::crc8(addr, 8) != addr[8]) {
+    celsius[n] = -400 * 16;
+    return;
+  }
   for ( i = 0; i < 9; i++) {           // we need 9 bytes
     data[i] = ds.read();
   }
   int16_t raw = (data[1] << 8) | data[0];
-  if (type_s) {
+  if (data[0] == 0x10) { //
     raw = raw << 3; // 9 bit resolution default
-    if (data[7] == 0x10) {
+    if (data[7] == 0x10) {//ds18s20
       // "count remain" gives full 12 bit resolution
       raw = (raw & 0xFFF0) + 12 - data[6];
     }
-  } else {
+  } else { //0x28:ds18b20,0x22:ds1822
     byte cfg = (data[4] & 0x60);
     // at lower res, the low bits are undefined, so let's zero them
     if (cfg == 0x00) raw = raw & ~7;  // 9 bit resolution, 93.75 ms
@@ -543,15 +578,44 @@ void ds1820() {
     else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
     //// default is 12 bit resolution, 750 ms conversion time
   }
-  celsius = (float)raw / 16.0;
+  celsius[n] = raw;
+  //celsius = (float)raw / 16.0;
 }
-
+void ds1820_disp(Stream *s) {
+  uint8_t n = 0;
+  if (ds1820_count == 0) return;
+  for (uint8_t i = 0; i < 11; i++) {
+    if (celsius[i] < -300 * 16) continue;
+    if (ds_addr[i][0] == 0) break;
+    if (n > 0) s->write(';');
+    s->print(F("C"));
+    if (ds1820_count > 1)
+      for (uint8_t i0 = 5; i0 < 7; i0++) {
+        if (ds_addr[i][i0] < 0x10) s->write('0');
+        s->print(ds_addr[i][i0], HEX);
+      }
+    s->write('=');
+    s->print((float) celsius[i] / 16.0);
+    n++;
+  }
+  s->println();
+}
 void check_rom() {
+  char * addr;
   uint8_t ch = 0, i;
   uint8_t sets[ROMLEN];
   for (i = 0; i < ROMLEN; i++) {
     sets[i] = eeprom_read(i);
     ch += sets[i];
+  }
+  addr = &sets[SN0];
+  if (ds1820_count == 1 && ds_addr[1][0] != 0)
+    for (i = 0; i < 8; i++) addr[i] = ds_addr[1][i];
+  if (OneWire::crc8(addr, 7) != addr[7])  {
+    if (OneWire::crc8(ds_addr[0], 7) == ds_addr[0][7])
+      for (i = 0; i < 8; i++)
+        addr[i] = ds_addr[0][i];
+    ch = 0xff;
   }
   if (ch != 0) {
     //set default
@@ -559,9 +623,9 @@ void check_rom() {
     sets[MAC1] = 0xAD;
     sets[MAC2] = 0xBE;
     if (ds_addr[0] != 0) {
-      sets[MAC3] = ds_addr[5];
-      sets[MAC4] = ds_addr[6];
-      sets[MAC5] = ds_addr[7];
+      sets[MAC3] = ds_addr[0][5];
+      sets[MAC4] = ds_addr[0][6];
+      sets[MAC5] = ds_addr[0][7];
     } else {
       sets[MAC3] = 0;
       sets[MAC4] = 1;
@@ -606,13 +670,7 @@ void check_rom() {
     sets[WATCHDOG5] = 'V';
     sets[WATCHDOG6] = 0xff;
 
-    ch = 0;
-    for (i = 0; i < ROMLEN; i++) {
-      ch += sets[i];
-      if (i == ROMCRC)
-        sets[i] = -ch;
-      eeprom_write(i, sets[i]);
-    }
+    set_rom_check();
   }
 }
 void set_rom_check() {
