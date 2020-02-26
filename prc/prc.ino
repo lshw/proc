@@ -110,6 +110,11 @@ enum
   WATCHDOG10,
   WATCHDOG_EN, //开启watchdog功能
   ROMCRC,
+  //后面的不做校验
+  REMOTE_CYCLE,
+  REMOTE_PORT_H,
+  REMOTE_PORT_L,
+  REMOTE_HOST,
   ROMLEN
 };
 
@@ -166,10 +171,22 @@ void setup() {
   IPAddress gateway(eeprom_read(GW0), eeprom_read(GW1), eeprom_read(GW2), eeprom_read(GW3));
   IPAddress subnet(eeprom_read(NETMARK0), eeprom_read(NETMARK1), eeprom_read(NETMARK2), eeprom_read(NETMARK3));
 
-  if (eeprom_read(IS_DHCP) == 'N' ||  Ethernet.begin(mac) == 0)
+  bool dhcp_ok = false;
+  if (eeprom_read(IS_DHCP) != 'N' ) {
+    Serial.print(F("\r\n#Use DHCP to get ip, please wait..."));
+    delay(2000);
+    Serial.write('.');
+    if (!Serial.available()) {
+      dhcp_ok = Ethernet.begin(mac);
+      if (dhcp_ok) Serial.println(F("OK!"));
+      else Serial.println(F("Failure."));
+    } else Serial.println(F("Quit."));
+  }
+  if (dhcp_ok == false)
     Ethernet.begin(mac, ip, gateway, subnet); //dhcp==N 或者dhcp获取失败
-  Serial.print(F("\r\n#ip:"));
+  Serial.print(F("\r\n#ip: "));
   Serial.println(Ethernet.localIP());
+  Serial.println(F("#input +++++[enter] into main menu"));
   server.begin();
   setup_watchdog(WDTO_30MS);
 }
@@ -214,8 +231,10 @@ void loop() {
           }
           break;
         default:
-          add_count = 0;
+          if (add_count > 0 ) add_count = 0;
+          else if (add_count > -100) add_count--;
       }
+      if (add_count == -99) break; //持续的串口超过100字节就退出去，不要让串口锁定造成服务器忙。
     }
   }
 }
@@ -333,7 +352,7 @@ void menu( uint8_t  stype) {
   if ( stype != S_SERIAL) {
     password = eeprom_read_u32(PASSWD0);
     if (password != 0) {
-      s->print(F("passwd:"));
+      s->print(F("passwd: "));
       passwd = s->parseInt();
       if (client)
         s_clean(&client);
@@ -348,7 +367,7 @@ void menu( uint8_t  stype) {
   s->print(Ethernet.localIP());
   while (1) {
     s_clean(s);
-    s->print(F("\r\n============Vout:"));
+    s->print(F("\r\n============Vout: "));
     if (digitalRead(_24V_OUT) == HIGH) s->println(F("On"));
     else s->println(F("Off"));
     if (stype != S_SERIAL)
@@ -370,10 +389,10 @@ void menu( uint8_t  stype) {
                "a-reboot\r\n"
                "b-restore default set\r\n"
                /*
-                 "c-watchdog set:"*/));
+                 "c-watchdog set: "*/));
     /*
       s->println((char) eeprom_read(WATCHDOG_EN));
-      s->print(F("d-watchdog script set:"));
+      s->print(F("d-watchdog script set: "));
       for (uint8_t i = WATCHDOG0; i <= WATCHDOG10; i++) {
       ch = eeprom_read(i);
       if (ch < 0x20 || ch > ('z' | 0x20)) break;
@@ -445,7 +464,7 @@ void menu( uint8_t  stype) {
       /*
         case 'c':
         case 'C':
-        s->print(F("input watchdog set[No,Min,Hour,Day]:"));
+        s->print(F("input watchdog set[No, Min, Hour, Day]: "));
         s_clean(s);
         if (s->readBytes(&ch, 1) == 1) {
         ch &= ~0x20; //a-z->A-Z
@@ -462,7 +481,7 @@ void menu( uint8_t  stype) {
         break;
         case 'd':
         case 'D':
-        s->print(F("please input watchdog scripts:"));
+        s->print(F("please input watchdog scripts: "));
         uint8_t i;
         i = 0;
         while (1) {
@@ -606,16 +625,16 @@ void check_rom() {
   uint8_t sets[ROMLEN];
   for (i = 0; i < ROMLEN; i++) {
     sets[i] = eeprom_read(i);
-    ch += sets[i];
+    if (i <= ROMCRC) ch += sets[i];
   }
   addr = &sets[SN0];
   if (ds1820_count == 1 && ds_addr[1][0] != 0)
     for (i = 0; i < 8; i++) addr[i] = ds_addr[1][i];
-  if (OneWire::crc8(addr, 7) != addr[7])  {
-    if (OneWire::crc8(ds_addr[0], 7) == ds_addr[0][7])
+  if (OneWire::crc8(addr, 7) != addr[7])  {//SN不对
+    if (OneWire::crc8(ds_addr[0], 7) == ds_addr[0][7])//当前SN有效
       for (i = 0; i < 8; i++)
-        addr[i] = ds_addr[0][i];
-    ch = 0xff;
+        addr[i] = ds_addr[0][i]; //复制当前SN
+    ch = 0xff;//重置ROM
   }
   if (ch != 0) {
     //set default
@@ -669,7 +688,10 @@ void check_rom() {
     sets[WATCHDOG4] = 'P';
     sets[WATCHDOG5] = 'V';
     sets[WATCHDOG6] = 0xff;
-
+    sets[REMOTE_HOST] = 0;
+    sets[REMOTE_CYCLE] = 0;
+    sets[REMOTE_PORT_H] = 1234 / 0x100;
+    sets[REMOTE_PORT_L] = 1234 % 0x100;
     set_rom_check();
   }
 }
@@ -684,7 +706,7 @@ void set_passwd(Stream *s) {
   s_clean(s);
   password = eeprom_read_u32(PASSWD0);
   if (password > 0) {
-    s->print(F("current password:"));
+    s->print(F("current password: "));
     passwd = s->parseInt();
     s->println();
     if (passwd != password) {
@@ -693,11 +715,11 @@ void set_passwd(Stream *s) {
     }
   }
   s_clean(s);
-  s->print(F("New password:"));
+  s->print(F("New password: "));
   passwd = s->parseInt();
   s->println();
   s_clean(s);
-  s->print(F("Retype new passwd:"));
+  s->print(F("Retype new passwd: "));
   if (passwd != s->parseInt()) {
     s->println(F("\r\nerror"));
     return;
@@ -724,18 +746,18 @@ void rc_calibration(uint8_t stype) {
   com_speed = eeprom_read_u32(SPEED0);
   s->print(F("osc="));
   s->print(osc);
-  s->print(F(",CAL38400="));
+  s->print(F(", CAL38400="));
   s->print(eeprom_read(CAL38400));
-  s->print(F(",CAL57600="));
+  s->print(F(", CAL57600="));
   s->print(eeprom_read(CAL57600));
-  s->print(F(",CAL115200="));
+  s->print(F(", CAL115200="));
   s->print(eeprom_read(CAL115200));
-  s->print(F(",CAL230400="));
+  s->print(F(", CAL230400="));
   s->println(eeprom_read(CAL230400));
 
   s->print(F("\r\nOn the Serial console("));
   disp_comset(s);
-  s->println(F("), Press the 'U' key and hold...."));
+  s->println(F("),  Press the 'U' key and hold...."));
   s->flush();
   uint8_t com_set = get_comset();
   Serial.begin(com_speed, com_set);
@@ -803,8 +825,9 @@ void rc_calibration(uint8_t stype) {
 }
 
 void info(uint8_t stype) {
-  uint8_t i, ch;
-
+  uint8_t ch;
+  uint16_t i;
+  uint32_t ms0;
   Stream *s;
   if (stype == S_SERIAL)
     s = &Serial;
@@ -812,41 +835,65 @@ void info(uint8_t stype) {
     s = &client;
   while (1) {
     s->println(F("\r\n============"));
-    s->print(F("0.MAC:"));
+    s->print(F("0.MAC: "));
     for (i = 0; i < 6; i++) {
       ch = eeprom_read(MAC0 + i);
       if (ch < 0x10)  s->write('0');
       s->print(ch, HEX);
     }
-    s->print(F("\r\n1.DHCP:"));
-    s->write(eeprom_read(IS_DHCP));
-    s->print(F("\r\n2.IP:"));
-    for (i = 0; i < 4; i++) {
-      ch = eeprom_read(IP0 + i);
-      s->print(ch);
-      if (i < 3)
-        s->write('.');
+    s->print(F("\r\n1.DHCP: "));
+    ch = eeprom_read(IS_DHCP);
+    s->write(ch);
+    if (ch == 'N' || ch == 'n') {
+      s->print(F("\r\n2.IP: "));
+      for (i = 0; i < 4; i++) {
+        ch = eeprom_read(IP0 + i);
+        s->print(ch);
+        if (i < 3)
+          s->write('.');
+      }
+      s->print(F("\r\n3.NETMARK: "));
+      for (i = 0; i < 4; i++) {
+        ch = eeprom_read(NETMARK0 + i);
+        s->print(ch);
+        if (i < 3)
+          s->write('.');
+      }
+      s->print(F("\r\n4.GETWAY: "));
+      for (i = 0; i < 4; i++) {
+        ch = eeprom_read(GW0 + i);
+        s->print(ch);
+        if (i < 3)      s->write('.');
+      }
+    } else {
+      s->print(F("\r\n5.REMOTE ENABLE: "));
+      ch = eeprom_read(REMOTE_CYCLE);
+      if (ch == 0) s->print(F("Disable"));
+      else {
+        s->print(ch);
+        s->print(F(" minute"));
+        if (ch > 1) s->write('s');
+        s->print(F("\r\n6.hostname: "));
+        for (i = 0; i < 30; i++) {
+          ch = eeprom_read(REMOTE_HOST + i);
+          if (ch == 0 || ch == 0xff) break;
+          Serial.write(ch);
+        }
+        s->print(F("\r\n7.port: "));
+        i = eeprom_read(REMOTE_PORT_H);
+        i = (i << 8) | eeprom_read(REMOTE_PORT_L);
+        Serial.print(i);
+      }
     }
-    s->print(F("\r\n3.NETMARK:"));
-    for (i = 0; i < 4; i++) {
-      ch = eeprom_read(NETMARK0 + i);
-      s->print(ch);
-      if (i < 3)
-        s->write('.');
-    }
-    s->print(F("\r\n4.GETWAY:"));
-    for (i = 0; i < 4; i++) {
-      ch = eeprom_read(GW0 + i);
-      s->print(ch);
-      if (i < 3)      s->write('.');
-    }
-    s->println(F("\r\nplease select(1-4,q):"));
+    s->println(F("\r\nplease select(1-7, q):"));
     dogcount = 0;
     s_clean(s);
     if (s->readBytes(&ch, 1) != 1) {
       s->println(F("Bye!"));
       return;
     }
+    delay(100);
+    while (s->available()) s->read();
     switch (ch) {
       case '0':
         s->println(F("todo..."));
@@ -862,16 +909,62 @@ void info(uint8_t stype) {
         s_clean(s);
         break;
       case '2':
-        s->println(F("please input ip:"));
+        s->print(F("please input ip: "));
         save_set(IP0, s);
         break;
       case '3':
-        s->println(F("please input netmark:"));
+        s->print(F("please input netmark: "));
         save_set(NETMARK0, s);
         break;
       case '4':
-        s->println(F("please input gateway:"));
+        s->print(F("please input gateway: "));
         save_set(GW0, s);
+        break;
+      case '5':
+        s->print(F("please input cycle(minutes, 0=disable): "));
+        ch = s->parseInt();
+        s->println(ch, HEX);
+        eeprom_write(REMOTE_CYCLE, ch);
+        //set_rom_check();
+        break;
+
+      case '6':
+        s->print(F("please input remote hostname: "));
+        for (i = 0; i < 30; i++) {
+          ms0 = millis() + 10000;
+          while (s->available() == 0) if (ms0 < millis()) break;
+          if (ms0 < millis()) break;
+          ch = s->read();
+          s->write(ch);
+          switch (ch) {
+            case 0xd:
+            case 0xa:
+              ch = 0;
+            case '0'...'9':
+            case 'a'...'z':
+            case 'A'...'Z':
+            case '.':
+            case '_':
+            case '-':
+              eeprom_write(REMOTE_HOST + i, ch);
+              break;
+            case 0x8:
+              if (i > 0) {
+                i--;
+                eeprom_write(REMOTE_HOST + i, 0);
+              }
+              break;
+          }
+          if (ch == 0) break;
+        }
+        //set_rom_check();
+        break;
+      case '7':
+        s->print(F("please input remote port: "));
+        i = s->parseInt();
+        eeprom_write(REMOTE_PORT_H, i / 0x100);
+        eeprom_write(REMOTE_PORT_L, i & 0xFF);
+        //set_rom_check();
         break;
       case 'q':
       case 'Q':
@@ -902,9 +995,9 @@ void save_set(uint16_t addr,  Stream *s) {
 void set_com_speed(Stream *s) {
   uint8_t ch;
   uint32_t speed1;
-  s->print(F("current speed:"));
+  s->print(F("current speed: "));
   s->println(eeprom_read_u32(SPEED0));
-  s->print(F("please input new speed:"));
+  s->print(F("please input new speed: "));
   s_clean(s);
   speed1 = s->parseInt(SKIP_NONE, 0xa);
   if (speed1 >= 10) {
@@ -926,7 +1019,7 @@ void set_com_speed(Stream *s) {
     set_rom_check();
   }
   s_clean(s);
-  s->print(F("data len(5-8):"));
+  s->print(F("data len(5-8): "));
   if (s->readBytes(&ch, 1) == 1)
     if (ch >= '5' &&  ch <= '8') {
       eeprom_write(DATA_LEN, ch);
@@ -934,7 +1027,7 @@ void set_com_speed(Stream *s) {
     }
   delay(100);
   s_clean(s);
-  s->print(F("\r\nParity(N,O,E):"));
+  s->print(F("\r\nParity(N, O, E): "));
   s->readBytes(&ch, 1);
   if (ch == 'o') ch = 'O';
   if (ch == 'e') ch = 'E';
@@ -944,7 +1037,7 @@ void set_com_speed(Stream *s) {
     set_rom_check();
   }
   s_clean(s);
-  s->print(F("\r\nstop len(1,2):"));
+  s->print(F("\r\nstop len(1, 2): "));
   s->readBytes(&ch, 1);
   if (ch == '2' || ch == '1') {
     eeprom_write(STOP_LEN, ch);
