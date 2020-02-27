@@ -174,10 +174,14 @@ void setup() {
   IPAddress subnet(eeprom_read(NETMARK0), eeprom_read(NETMARK1), eeprom_read(NETMARK2), eeprom_read(NETMARK3));
 
   bool dhcp_ok = false;
+  while (Serial.available()) Serial.read();
   if (eeprom_read(IS_DHCP) != 'N' ) {
     Serial.print(F("\r\n#Use DHCP to get ip, please wait..."));
-    delay(2000);
-    Serial.write('.');
+    for (uint8_t i = 0; i < 6; i++) {
+      if (Serial.available()) break;
+      delay(300);
+      Serial.write('.');
+    }
     if (!Serial.available()) {
       dhcp_ok = Ethernet.begin(mac);
       if (dhcp_ok) Serial.println(F("OK!"));
