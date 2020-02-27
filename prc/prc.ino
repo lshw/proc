@@ -18,7 +18,8 @@ int16_t celsius[11];
 boolean alreadyConnected = false;
 EthernetClient client;
 uint8_t add_count = 0;
-uint32_t timer1 = 0; //秒
+uint16_t timer1 = 0; //秒
+uint16_t timer2 = 0; //秒  定时器最长65536秒 18小时
 uint16_t volatile dogcount = 0; //超时重启，主程序循环清零，不清零的话100秒重启系统
 
 #define S_TCP  1
@@ -131,6 +132,7 @@ uint8_t get_cal(uint32_t speedx) {
       return CAL38400;
   }
 }
+uint8_t remote_cycle;
 void setup() {
   byte mac[6];
   pinMode(_24V_OUT, OUTPUT);
@@ -189,16 +191,28 @@ void setup() {
   Serial.println(F("#input +++++[enter] into main menu"));
   server.begin();
   setup_watchdog(WDTO_30MS);
+  remote_cycle = eeprom_read(REMOTE_CYCLE);
 }
 void loop() {
   char ch;
   dogcount = 0;
+
+  if (timer1 == 0) {
+    timer1 = 60; //60秒测温一次
+    ds1820_all();
+  }
+
   if (!alreadyConnected) {
     client = server.available();
+    if (remote_cycle > 0 && !client && timer2 == 0) { //如果服务器没有客户端接入，就试试远程
+      timer2 = 60;
+      timer2 = remote_cycle; //每x分钟，连一次远程
+      remote_link();
+      remote_cycle = eeprom_read(REMOTE_CYCLE);
+    }
     if (client) {
       alreadyConnected = true;
       delay(100);
-      s_clean(&client);
       ds1820_disp(&client);
     }
   }
@@ -213,10 +227,6 @@ void loop() {
     }
   }
 
-  if (timer1 == 0) {
-    timer1 = 60; //60秒测温一次
-    ds1820_all();
-  }
   if (Serial.available() > 0) {
     while (Serial.available()) {
       switch (Serial.read()) {
@@ -287,7 +297,8 @@ ISR(WDT_vect) {
   }
   ms += 30;
   if (ms > 1000) {
-    if (timer1 > 0) timer1--;
+    if (timer1 > 0) timer1--;//定时器1 测温
+    if (timer2 > 0) timer2--;//定时器2 链接远程服务器
     ms -= 1000;
     sec++;
     if (debug)
@@ -867,12 +878,12 @@ void info(uint8_t stype) {
       }
     } else {
       s->print(F("\r\n5.REMOTE ENABLE: "));
-      ch = eeprom_read(REMOTE_CYCLE);
-      if (ch == 0) s->print(F("Disable"));
+      remote_cycle = eeprom_read(REMOTE_CYCLE);
+      if (remote_cycle == 0) s->print(F("Disable"));
       else {
-        s->print(ch);
+        s->print(remote_cycle);
         s->print(F(" minute"));
-        if (ch > 1) s->write('s');
+        if (remote_cycle > 1) s->write('s');
         s->print(F("\r\n6.hostname: "));
         for (i = 0; i < 30; i++) {
           ch = eeprom_read(REMOTE_HOST + i);
@@ -925,7 +936,8 @@ void info(uint8_t stype) {
         ch = s->parseInt();
         s->println(ch, HEX);
         eeprom_write(REMOTE_CYCLE, ch);
-        //set_rom_check();
+        remote_cycle = ch;
+        timer2 = 0; //马上发送一次
         break;
 
       case '6':
@@ -1115,4 +1127,13 @@ uint8_t get_comset() {
 void s_clean(Stream * s) {
   delay(10);
   while (s->available()) s->read();
+}
+void remote_link() {
+  char hostname[30];
+  uint8_t i;
+  for (i = 0; i < sizeof(hostname); i++) {
+    hostname[i] = eeprom_read(REMOTE_HOST + i);
+    if (hostname[i] == 0) break;
+  }
+  client.connect(hostname, (uint16_t)(eeprom_read(REMOTE_PORT_H) << 8) | eeprom_read(REMOTE_PORT_L));
 }
