@@ -707,6 +707,7 @@ void check_rom() {
     sets[REMOTE_CYCLE] = 0;
     sets[REMOTE_PORT_H] = 1234 / 0x100;
     sets[REMOTE_PORT_L] = 1234 % 0x100;
+    for (i = 0; i < sizeof(sets); i++) eeprom_write(i, sets[i]);
     set_rom_check();
   }
 }
