@@ -198,7 +198,6 @@ void setup() {
   remote_cycle = eeprom_read(REMOTE_CYCLE);
 }
 void loop() {
-  char ch;
   dogcount = 0;
 
   if (timer1 == 0) {
@@ -254,7 +253,8 @@ void loop() {
 }
 
 void com_shell() {
-  char ch, chlen = 0, chs[250];
+  char ch, chs[512];
+  uint16_t chlen = 0;
   add_count = 0;
   if (!client.connected()) return;
   s_clean(&Serial);
@@ -282,7 +282,7 @@ void com_shell() {
       while (Serial.available()) {
         chs[chlen] = Serial.read();
         chlen++;
-        if (chlen >= 250) break;
+        if (chlen >= sizeof(chs)) break;
       }
       client.write(chs, chlen);
     }
@@ -347,7 +347,7 @@ void setup_watchdog(int ii) {
 
 void menu( uint8_t  stype) {
   uint32_t passwd, password;
-  char ch;
+  uint8_t ch;
   Stream *s;
   if (stype == S_SERIAL)
     s = &Serial;
