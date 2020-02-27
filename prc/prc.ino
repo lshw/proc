@@ -1,4 +1,8 @@
 #define debug  false
+#include "commit.h"  //版本号
+#ifndef GIT_COMMIT_ID
+#define GIT_COMMIT_ID "test"
+#endif
 #define _24V_OUT 3
 #define PC_RESET A4
 #define PC_POWER A5
@@ -98,6 +102,17 @@ enum
   SN6,
   SN7,
   SN8,
+  NAME0,
+  NAME1,
+  NAME2,
+  NAME3,
+  NAME4,
+  NAME5,
+  NAME6,
+  NAME7,
+  NAME8,
+  NAME9,
+  NAME10,
   WATCHDOG0,//r reset300ms
   WATCHDOG1,//w wait300ms
   WATCHDOG2,//P power 5 sec
@@ -160,8 +175,7 @@ void setup() {
   uint8_t com_set = get_comset();
   Serial.begin(com_speed, com_set);
   while (!Serial) ;
-  Serial.write('#');
-  disp_comset(&Serial);
+  hello(&Serial);
   digitalWrite(_24V_OUT, eeprom_read(VOUT_SET));
   mac[0] = 0xde;
   mac[1] = 0xad;
@@ -192,7 +206,7 @@ void setup() {
     Ethernet.begin(mac, ip, gateway, subnet); //dhcp==N 或者dhcp获取失败
   Serial.print(F("\r\n#ip: "));
   Serial.println(Ethernet.localIP());
-  Serial.println(F("#input +++++[enter] into main menu"));
+  Serial.println(F("#+++++[enter] into main menu"));
   server.begin();
   setup_watchdog(WDTO_30MS);
   remote_cycle = eeprom_read(REMOTE_CYCLE);
@@ -353,16 +367,7 @@ void menu( uint8_t  stype) {
     s = &Serial;
   else
     s = &client;
-  s->print(F("SN="));
-  for (uint8_t i = 0; i < sizeof(ds_addr[0]); i++) {
-    ch = eeprom_read(SN0 + i);
-    if (ch < 0x10) s->write('0');
-    s->print((uint8_t)ch, HEX);
-  }
-  s->print(F("\r\ncom="));
-  disp_comset(s);
-  s->println();
-  ds1820_disp(s);
+  hello(s);
   s->setTimeout(10000);
   if ( stype != S_SERIAL) {
     password = eeprom_read_u32(PASSWD0);
@@ -387,7 +392,9 @@ void menu( uint8_t  stype) {
     else s->println(F("Off"));
     if (stype != S_SERIAL)
       s->println(F("0-com shell"));
-    s->print(F("r-reset (300ms)\r\n"
+    s->print(F("1-name:"));
+    disp_name(s);
+    s->print(F("\r\nr-reset (300ms)\r\n"
                "p-powerdown(300ms)\r\n"
                "P-powerdown(5 sec)\r\n"
                "4-set Vout to "));
@@ -425,6 +432,10 @@ void menu( uint8_t  stype) {
           return;
         }
         break;
+      case '1':
+        s->print(F("please input name: "));
+        eeprom_set_str(s, NAME0, NAME10);
+        set_rom_check();
       case 'r':
         pc_reset_on = 300;
         break;
@@ -523,6 +534,7 @@ void menu( uint8_t  stype) {
       */
       case 'q':
       case 'Q':
+        s->println(F("Bye!"));
         s_clean(s);
         return;
     }
@@ -656,10 +668,19 @@ void check_rom() {
     sets[MAC0] = 0xDE;
     sets[MAC1] = 0xAD;
     sets[MAC2] = 0xBE;
+    uint8_t * addr;
+    if (ds1820_count == 1 && ds_addr[1][0] != 0)
+      addr = ds_addr[1];
+    else
+      addr = ds_addr[0];
+    sets[NAME0] = 'P';
+    sets[NAME0 + 1] = 'R';
+    sets[NAME0 + 2] = 'C';
     if (ds_addr[0] != 0) {
-      sets[MAC3] = ds_addr[0][5];
-      sets[MAC4] = ds_addr[0][6];
-      sets[MAC5] = ds_addr[0][7];
+      sets[MAC3] = addr[5];
+      sets[MAC4] = addr[6];
+      sets[MAC5] = addr[7];
+      sprintf(&sets[NAME0 + 3], "%02X%02X%02X\x0", addr[5], addr[6], addr[7]);
     } else {
       sets[MAC3] = 0;
       sets[MAC4] = 1;
@@ -893,12 +914,12 @@ void info(uint8_t stype) {
         for (i = 0; i < 30; i++) {
           ch = eeprom_read(REMOTE_HOST + i);
           if (ch == 0 || ch == 0xff) break;
-          Serial.write(ch);
+          s->write(ch);
         }
         s->print(F("\r\n7.port: "));
         i = eeprom_read(REMOTE_PORT_H);
         i = (i << 8) | eeprom_read(REMOTE_PORT_L);
-        Serial.print(i);
+        s->print(i);
       }
     }
     s->println(F("\r\nplease select(1-7, q):"));
@@ -947,41 +968,13 @@ void info(uint8_t stype) {
 
       case '6':
         s->print(F("please input remote hostname: "));
-        for (i = 0; i < 30; i++) {
-          ms0 = millis() + 10000;
-          while (s->available() == 0) if (ms0 < millis()) break;
-          if (ms0 < millis()) break;
-          ch = s->read();
-          s->write(ch);
-          switch (ch) {
-            case 0xd:
-            case 0xa:
-              ch = 0;
-            case '0'...'9':
-            case 'a'...'z':
-            case 'A'...'Z':
-            case '.':
-            case '_':
-            case '-':
-              eeprom_write(REMOTE_HOST + i, ch);
-              break;
-            case 0x8:
-              if (i > 0) {
-                i--;
-                eeprom_write(REMOTE_HOST + i, 0);
-              }
-              break;
-          }
-          if (ch == 0) break;
-        }
-        //set_rom_check();
+        eeprom_set_str(s, REMOTE_HOST, REMOTE_HOST + 30);
         break;
       case '7':
         s->print(F("please input remote port: "));
         i = s->parseInt();
         eeprom_write(REMOTE_PORT_H, i / 0x100);
         eeprom_write(REMOTE_PORT_L, i & 0xFF);
-        //set_rom_check();
         break;
       case 'q':
       case 'Q':
@@ -1133,6 +1126,24 @@ void s_clean(Stream * s) {
   delay(10);
   while (s->available()) s->read();
 }
+void hello(Stream *s) {
+  uint8_t ch;
+  s->print(F("\r\n#"));
+  disp_comset(s);
+  s->println(F("\r\n#Ver:" GIT_COMMIT_ID));
+  s->print(F("#name:"));
+  disp_name(s);
+  s->print(F("\r\n#SN:"));
+  for (uint8_t i = 0; i < sizeof(ds_addr[0]); i++) {
+    ch = eeprom_read(SN0 + i);
+    if (ch < 0x10) s->write('0');
+    s->print((uint8_t)ch, HEX);
+  }
+  s->print(F("\r\n#com:"));
+  disp_comset(s);
+  s->println();
+  ds1820_disp(s);
+}
 void remote_link() {
   char hostname[30];
   uint8_t i;
@@ -1141,4 +1152,47 @@ void remote_link() {
     if (hostname[i] == 0) break;
   }
   client.connect(hostname, (uint16_t)(eeprom_read(REMOTE_PORT_H) << 8) | eeprom_read(REMOTE_PORT_L));
+}
+void disp_name(Stream * s) {
+  char ch;
+  for (uint16_t i = NAME0; i <= NAME10; i++) {
+    ch = eeprom_read(i);
+    if (ch == 0)
+      break;
+    s->write(ch);
+  }
+}
+
+//通过console 输入字符串，保存到eeprom的 addr0- addr1
+void eeprom_set_str(Stream * s, uint16_t addr0, uint16_t addr1) {
+  uint32_t ms0;
+  uint8_t ch;
+  for (uint16_t i = addr0; i < addr1; i++) {
+    ms0 = millis() + 10000;
+    while (s->available() == 0) if (ms0 < millis()) break;
+    if (ms0 < millis()) break;
+    ch = s->read();
+    s->write(ch);
+    switch (ch) {
+      case 0xd:
+      case 0xa:
+        ch = 0;
+      case '0'...'9':
+      case 'a'...'z':
+      case 'A'...'Z':
+      case '.':
+      case '_':
+      case '-':
+        eeprom_write(i, ch);
+        if (i < addr1) eeprom_write(i + 1, 0);
+        break;
+      case 0x8:
+        if (i > addr0 + 1) {
+          i = i - 2;
+          eeprom_write(i + 1, 0);
+        }
+        break;
+    }
+    if (ch == 0) break;
+  }
 }
