@@ -6,6 +6,7 @@
 #define _24V_OUT 3
 #define PC_RESET A4
 #define PC_POWER A5
+#define PWM 5
 #define DS A3
 #define LED 13
 #define NET_RESET 4
@@ -53,7 +54,7 @@ void eeprom_write_u32(uint16_t addr, uint32_t data) {
 uint8_t goto_bootloader __attribute__ ((section (".noinit"))); //需要进入bootloader
 uint8_t goto_bootloader_crc __attribute__ ((section (".noinit")));
 
-byte ds_addr[11][8];
+uint8_t ds_addr[11][8];
 OneWire ds(DS);
 
 enum
@@ -149,7 +150,7 @@ uint8_t get_cal(uint32_t speedx) {
 }
 uint8_t remote_cycle;
 void setup() {
-  byte mac[6];
+  uint8_t  mac[6];
   pinMode(_24V_OUT, OUTPUT);
   digitalWrite(_24V_OUT, HIGH); //默认24V开启输出
   pinMode(PC_RESET, OUTPUT);
@@ -358,11 +359,13 @@ void setup_watchdog(int ii) {
   WDTCSR = bb;
   WDTCSR |= _BV(WDIE);
 }
-
+uint8_t pwm=128;
 void menu( uint8_t  stype) {
   uint32_t passwd, password;
   uint8_t ch;
   Stream *s;
+  pinMode(PWM,OUTPUT);
+  analogWrite(PWM,pwm);
   if (stype == S_SERIAL)
     s = &Serial;
   else
@@ -395,8 +398,11 @@ void menu( uint8_t  stype) {
     s->print(F("1-name:"));
     disp_name(s);
     s->print(F("\r\nr-reset (300ms)\r\n"
+               "R-reset (5 sec)\r\n"
                "p-powerdown(300ms)\r\n"
                "P-powerdown(5 sec)\r\n"
+               "m-PWM-10\r\n"
+               "M-PWM+10\r\n"
                "4-set Vout to "));
     if (digitalRead(_24V_OUT) == HIGH) s->print(F("Off"));
     else s->print(F("On"));
@@ -423,6 +429,8 @@ void menu( uint8_t  stype) {
     s->println(F("\r\nq-quit"));
     if (s->readBytes(&ch, 1) != 1) {
       s->println(F("Bye!"));
+      pinMode(PWM,INPUT);
+      digitalWrite(PWM,HIGH);
       return;
     }
     switch (ch) {
@@ -438,6 +446,9 @@ void menu( uint8_t  stype) {
         set_rom_check();
       case 'r':
         pc_reset_on = 300;
+        break;
+      case 'R':
+        pc_reset_on = 5000;
         break;
       case 'p':
         pc_power_on = 300;
@@ -487,6 +498,21 @@ void menu( uint8_t  stype) {
         OSCCAL = osc;
         asm volatile ("  jmp 0"); //重启
         break;
+      case 'M':
+       pinMode(PWM,OUTPUT);
+      if(pwm<245)
+       pwm+=10;
+       else
+       pwm=255;
+       Serial.print(F("PWM="));Serial.println(pwm);
+       analogWrite(PWM,pwm);
+       break;
+          case 'm':
+          if(pwm>10) pwm-=10;
+          else pwm=0;
+       Serial.print(F("PWM="));Serial.println(pwm);
+       analogWrite(PWM,pwm);
+       break;
       /*
         case 'c':
         case 'C':
@@ -544,7 +570,7 @@ void menu( uint8_t  stype) {
 uint8_t ds1820_count = 0;
 void ds1820_search() {
   uint8_t i;
-  char * addr;
+  uint8_t * addr;
   ds.reset_search();
   delay(250);
   celsius[0] = -400 * 16; //跳过0号
@@ -654,13 +680,17 @@ void check_rom() {
     sets[i] = eeprom_read(i);
     if (i <= ROMCRC) ch += sets[i];
   }
+  
   addr = &sets[SN0];
   if (ds1820_count == 1 && ds_addr[1][0] != 0)
-    for (i = 0; i < 8; i++) addr[i] = ds_addr[1][i];
-  if (OneWire::crc8(addr, 7) != addr[7])  {//SN不对
+    for (i = 0; i < 8; i++) {
+      addr[i] = ds_addr[1][i];
+    }
+  if (OneWire::crc8(addr, 7) !=  (uint8_t)addr[7])  {//SN不对
     if (OneWire::crc8(ds_addr[0], 7) == ds_addr[0][7])//当前SN有效
-      for (i = 0; i < 8; i++)
+      for (i = 0; i < 8; i++){
         addr[i] = ds_addr[0][i]; //复制当前SN
+      }
     ch = 0xff;//重置ROM
   }
   if (ch != 0) {
