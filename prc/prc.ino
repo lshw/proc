@@ -325,23 +325,27 @@ ISR(WDT_vect) {
         Serial.println(sec);
   }
   //处理reset键，其它程序只要修改 pc_reset_on=300，就可以按下300ms
-  if (pc_reset_on > 0) pc_reset_on -= 30; //30ms
-  if (pc_reset_on > 0) { //reset开关按下
-    if (digitalRead(PC_RESET) != HIGH)
-      digitalWrite(PC_RESET, HIGH);
-  } else { //reset开关松开
-    if (digitalRead(PC_RESET) != LOW)
-      digitalWrite(PC_RESET, LOW);
+  if (pc_reset_on > 0)
+  {
+    pc_reset_on -= 30; //30ms
+    if (pc_reset_on > 0) { //reset开关按下
+      if (digitalRead(PC_RESET) != HIGH)
+        digitalWrite(PC_RESET, HIGH);
+    } else { //reset开关松开
+      if (digitalRead(PC_RESET) != LOW)
+        digitalWrite(PC_RESET, LOW);
+    }
   }
-
   //处理reset键，其它程序只要修改 pc_power_on=300，就可以按下300ms
-  if (pc_power_on > 0) pc_power_on -= 30; //30ms
-  if (pc_power_on > 0) { //power开关按下
-    if (digitalRead(PC_POWER) != HIGH)
-      digitalWrite(PC_POWER, HIGH);
-  } else { //power开关松开
-    if (digitalRead(PC_POWER) != LOW)
-      digitalWrite(PC_POWER, LOW);
+  if (pc_power_on > 0) {
+    pc_power_on -= 30; //30ms
+    if (pc_power_on > 0) { //power开关按下
+      if (digitalRead(PC_POWER) != HIGH)
+        digitalWrite(PC_POWER, HIGH);
+    } else { //power开关松开
+      if (digitalRead(PC_POWER) != LOW)
+        digitalWrite(PC_POWER, LOW);
+    }
   }
 }
 
@@ -429,8 +433,8 @@ void menu( uint8_t  stype) {
     s->println(F("\r\nq-quit"));
     if (s->readBytes(&ch, 1) != 1) {
       s->println(F("Bye!"));
-      pinMode(PWM,INPUT);
-      digitalWrite(PWM,HIGH);
+      pinMode(PWM, INPUT);
+      digitalWrite(PWM, HIGH);
       return;
     }
     switch (ch) {
@@ -688,7 +692,7 @@ void check_rom() {
     }
   if (OneWire::crc8(addr, 7) !=  (uint8_t)addr[7])  {//SN不对
     if (OneWire::crc8(ds_addr[0], 7) == ds_addr[0][7])//当前SN有效
-      for (i = 0; i < 8; i++){
+      for (i = 0; i < 8; i++) {
         addr[i] = ds_addr[0][i]; //复制当前SN
       }
     ch = 0xff;//重置ROM
