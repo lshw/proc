@@ -134,6 +134,8 @@ enum
   REMOTE_HOST,
   ROMLEN
 };
+#define SCRIPT_SIZE 30 //每个长度  ;
+#define SCRIPT_ADDR  ROMLEN+2 //起始地址
 
 EthernetServer server(23);
 uint8_t osc;
@@ -363,13 +365,14 @@ void setup_watchdog(int ii) {
   WDTCSR = bb;
   WDTCSR |= _BV(WDIE);
 }
-uint8_t pwm=128;
+uint8_t pwm = 128;
+uint8_t vout;
 void menu( uint8_t  stype) {
   uint32_t passwd, password;
   uint8_t ch;
   Stream *s;
-  pinMode(PWM,OUTPUT);
-  analogWrite(PWM,pwm);
+  pinMode(PWM, OUTPUT);
+  analogWrite(PWM, pwm);
   if (stype == S_SERIAL)
     s = &Serial;
   else
@@ -399,29 +402,27 @@ void menu( uint8_t  stype) {
     else s->println(F("Off"));
     if (stype != S_SERIAL)
       s->println(F("0-com shell"));
-    s->print(F("1-name:"));
-    disp_name(s);
-    s->print(F("\r\nr-reset (300ms)\r\n"
+    s->print(F("r-reset (300ms)\r\n"
                "R-reset (5 sec)\r\n"
                "p-powerdown(300ms)\r\n"
                "P-powerdown(5 sec)\r\n"
                "m-PWM-10\r\n"
                "M-PWM+10\r\n"
-               "4-set Vout to "));
-    if (digitalRead(_24V_OUT) == HIGH) s->print(F("Off"));
-    else s->print(F("On"));
-    s->print(F("(3 sec)\r\n"
-               "5-set Vout to "));
+               "v-set Vout to "));
     if (digitalRead(_24V_OUT) == HIGH) s->println(F("Off"));
     else s->println(F("On"));
-    s->print(F("6-setpasswd\r\n"
-               "7-network info &  modi\r\n"
-               "8-com set\r\n"
-               /*      "9-com speed calibration\r\n" */
+    disp_script( s, 1); //从0号开始显示
+    s->print(F(
                "a-reboot\r\n"
                "b-restore default set\r\n"
-               /*
-                 "c-watchdog set: "*/));
+               /*      "9-com speed calibration\r\n" */
+               "c-network info &  modi\r\n"
+               "d-com set\r\n"
+               "e-setpasswd\r\n"
+               "f-modi script 1-9\r\n"
+             ));
+    s->print(F("n-change name:"));
+    disp_name(s);
     /*
       s->println((char) eeprom_read(WATCHDOG_EN));
       s->print(F("d-watchdog script set: "));
@@ -444,7 +445,14 @@ void menu( uint8_t  stype) {
           return;
         }
         break;
-      case '1':
+      case '1'...'9':
+        run_script(s, ch & 0xf); //SCRIPT_ADDR0是开机自运行
+        break;
+      case 'f':
+        modi_script(s);
+        break;
+      case 'n':
+      case 'N':
         s->print(F("please input name: "));
         eeprom_set_str(s, NAME0, NAME10);
         set_rom_check();
@@ -461,37 +469,24 @@ void menu( uint8_t  stype) {
         pc_power_on = 5000;
         break;
       case 'v':
-        digitalWrite(_24V_OUT, LOW);
-        break;
-      case 'V':
-        digitalWrite(_24V_OUT, HIGH);
-        break;
-      case '4':
-        digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
-        s->print(F("\r\nVout="));
-        s->print(digitalRead(_24V_OUT));
-        delay(3000);
-        digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
-        s->print(F("\r\nVout="));
-        s->println(digitalRead(_24V_OUT));
-        delay(1000);
-        s_clean(s);
-        break;
-      case '5':
         digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
         eeprom_write(VOUT_SET, digitalRead(_24V_OUT));
         set_rom_check();
         break;
-      case '6':
+      case 'e':
+      case 'E':
         set_passwd(s);
         break;
-      case '7':
+      case 'c':
+      case 'C':
         info(stype);
         break;
-      case '8':
+      case 'd':
+      case 'D':
         set_com_speed(s);
         break;
-      case '9':
+      case 'z':
+      case 'Z':
         rc_calibration(stype);
         break;
       case 'b':
@@ -503,20 +498,22 @@ void menu( uint8_t  stype) {
         asm volatile ("  jmp 0"); //重启
         break;
       case 'M':
-       pinMode(PWM,OUTPUT);
-      if(pwm<245)
-       pwm+=10;
-       else
-       pwm=255;
-       Serial.print(F("PWM="));Serial.println(pwm);
-       analogWrite(PWM,pwm);
-       break;
-          case 'm':
-          if(pwm>10) pwm-=10;
-          else pwm=0;
-       Serial.print(F("PWM="));Serial.println(pwm);
-       analogWrite(PWM,pwm);
-       break;
+        pinMode(PWM, OUTPUT);
+        if (pwm < 245)
+          pwm += 10;
+        else
+          pwm = 255;
+        Serial.print(F("PWM=")); Serial.println(pwm);
+        analogWrite(PWM, pwm);
+        analogWrite(_24V_OUT, pwm);
+        break;
+      case 'm':
+        if (pwm > 10) pwm -= 10;
+        else pwm = 0;
+        Serial.print(F("PWM=")); Serial.println(pwm);
+        analogWrite(PWM, pwm);
+        analogWrite(_24V_OUT, pwm);
+        break;
       /*
         case 'c':
         case 'C':
@@ -1228,5 +1225,132 @@ void eeprom_set_str(Stream * s, uint16_t addr0, uint16_t addr1) {
         break;
     }
     if (ch == 0) break;
+  }
+}
+void run_script( Stream * s, uint8_t script_n) {
+  uint8_t i, ch;
+  uint16_t eeprom_addr;
+  eeprom_addr = SCRIPT_ADDR + SCRIPT_SIZE * script_n;
+  s->print(F("script")); s->println(script_n);
+  ch = eeprom_read(eeprom_addr);
+  while (ch != 0) {
+    switch (ch) {
+      case 'p':
+        if (next_is_number(eeprom_addr)) {
+          eeprom_addr++;
+          pc_power_on = get_uint16(eeprom_addr); //addr要被更新
+        } else {
+          digitalWrite(PC_POWER, LOW);
+        }
+        break;
+      case 'P':
+        if (next_is_number(eeprom_addr)) {
+          eeprom_addr++;
+          pc_power_on = get_uint16(eeprom_addr); //addr要被更新
+        } else {
+          digitalWrite(PC_POWER, HIGH);
+        }
+        break;
+      case 'r':
+        if (next_is_number(eeprom_addr)) {
+          eeprom_addr++;
+          pc_reset_on = get_uint16(eeprom_addr); //addr要被更新
+        } else {
+          digitalWrite(PC_RESET, LOW);
+        }
+        break;
+      case 'R':
+        if (next_is_number(eeprom_addr)) {
+          eeprom_addr++;
+          pc_reset_on = get_uint16(eeprom_addr); //i要被更新
+        } else {
+          digitalWrite(PC_RESET, HIGH);
+        }
+        break;
+      case 'v':
+        if (next_is_number(eeprom_addr)) {
+          eeprom_addr++;
+          analogWrite(_24V_OUT, get_uint16(eeprom_addr));
+        } else
+          digitalWrite(_24V_OUT, LOW);
+        break;
+      case 'V':
+        if (next_is_number(eeprom_addr)) {
+          eeprom_addr++;
+          analogWrite(_24V_OUT, get_uint16(eeprom_addr));
+        } else
+          digitalWrite(_24V_OUT, HIGH);
+        break;
+      case 't':
+      case 'T':
+        if (next_is_number(eeprom_addr)) {
+          eeprom_addr++;
+          delay(get_uint16(eeprom_addr));
+        }
+        break;
+      case 'm':
+      case 'M':
+        if (next_is_number(eeprom_addr)) {
+          eeprom_addr++;
+          analogWrite(PWM, get_uint16(eeprom_addr));
+        }
+        break;
+    }
+    eeprom_addr++;
+    ch = eeprom_read(eeprom_addr);
+  }
+}
+uint16_t get_uint16(uint16_t & addr) {
+  uint16_t ret = 0;
+  uint8_t ch;
+
+  ch = eeprom_read(addr);
+  while (ch >= '0' && ch <= '9') {
+    ret *= 10;
+    ret += ch & 0xf;
+    addr++;
+    ch = eeprom_read(addr);
+  }
+  addr--;
+  return ret;
+}
+bool next_is_number(uint16_t addr) {
+  uint8_t ch;
+  ch = eeprom_read(addr + 1);
+  return ch >= '0' && ch <= '9';
+}
+void modi_script( Stream * s) {
+
+  uint8_t ch;
+  delay(100);
+  s_clean(s);
+  disp_script( s, 0); //从0号开始显示
+  while (!s->available())  dogcount = 0;
+  ch = s->read();
+  Serial.write(ch);
+  switch (ch) {
+    case '0'...'9':
+      Serial.print(F("-please input script:"));
+      ch = ch & 0xf;
+      eeprom_set_str(s, SCRIPT_ADDR +  SCRIPT_SIZE * ch, SCRIPT_ADDR + (ch + 1)*SCRIPT_SIZE);
+      break;
+    case 'q':
+    case 'Q':
+      return;
+  }
+}
+void disp_script( Stream * s, uint8_t beg) {
+  uint8_t i, ch;
+  for (i = beg; i < 10; i++) {
+    ch = eeprom_read(SCRIPT_ADDR + i * SCRIPT_SIZE);
+    if (beg != 0 && (ch == 0 || ch == 0xff)) continue;
+    s->print(i);
+    s->write('.');
+    for (uint8_t m = 0; m < SCRIPT_SIZE; m++) {
+      ch = eeprom_read(SCRIPT_ADDR + i * SCRIPT_SIZE + m);
+      if (ch == 0 || ch == 0xff) break;
+      if (ch < 0x80) s->write(ch);
+    }
+    s->println();
   }
 }
