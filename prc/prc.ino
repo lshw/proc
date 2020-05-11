@@ -294,14 +294,17 @@ void com_shell() {
       else add_count = 0;
       Serial.write(ch);
     }
+    uint32_t ms0=millis()+2000;
     while (Serial.available()) {
       chlen = 0;
       while (Serial.available()) {
-        chs[chlen] = Serial.read();
-        chlen++;
-        if (chlen >= sizeof(chs)) break;
+	chs[chlen] = Serial.read();
+	chlen++;
+	if (chlen >= sizeof(chs)) break;
       }
       client.write(chs, chlen);
+      if (ms0 < millis())
+	break; //最多2秒
     }
   }
 }
