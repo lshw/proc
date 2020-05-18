@@ -231,18 +231,24 @@ void loop() {
     timer1 = 60; //60秒测温一次
     ds1820_all();
   }
-  if (!alreadyConnected) {
-    client = server.available();
-    if (remote_cycle > 0 && !client && timer2 == 0) { //如果服务器没有客户端接入，就试试远程
+
+  clientn = server.available();
+  if (clientn) {//有数据进来
+  if(clientn!=client) { 
+    //有新的连接进来
+    if ( alreadyConnected)
+      client.stop(); //有bye状态的老的连接，就先踢掉
+    alreadyConnected = true;
+    client = clientn;
+    }
+  }
+
+  if (!alreadyConnected) { //无连接
+    if (remote_cycle > 0 && timer2 == 0) { //如果服务器没有客户端接入，就试试远程
       timer2 = 60;
       timer2 = remote_cycle; //每x分钟，连一次远程
       remote_link();
       remote_cycle = eeprom_read(REMOTE_CYCLE);
-    }
-    if (client) {
-      alreadyConnected = true;
-      delay(100);
-      ds1820_disp(&client);
     }
   }
 
@@ -250,10 +256,11 @@ void loop() {
     if (!client.connected()) {
       client.stop();
       alreadyConnected = false;
-    }
-    if (client.available() > 0) { //tcp有数据进来
-      menu(S_TCP);
-      save_set();
+    }else {
+      if (client.available() > 0) { //client tcp有数据进来
+	menu(S_TCP);
+	save_set();
+      }
     }
   }
 
