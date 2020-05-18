@@ -213,8 +213,19 @@ void setup() {
   setup_watchdog(WDTO_30MS);
   remote_cycle = eeprom_read(REMOTE_CYCLE);
 }
+EthernetClient clientn;
 void loop() {
   dogcount = 0;
+  clientn = server.available();
+
+  if (clientn) {//有新的连接进来
+    if ( alreadyConnected)
+      client.stop(); //有bye状态的老的连接，就先踢掉
+    else
+      alreadyConnected = true;
+
+    client = clientn;
+  }
 
   if (timer1 == 0) {
     timer1 = 60; //60秒测温一次
@@ -294,17 +305,17 @@ void com_shell() {
       else add_count = 0;
       Serial.write(ch);
     }
-    uint32_t ms0=millis()+2000;
+    uint32_t ms0 = millis() + 2000;
     while (Serial.available()) {
       chlen = 0;
       while (Serial.available()) {
-	chs[chlen] = Serial.read();
-	chlen++;
-	if (chlen >= sizeof(chs)) break;
+        chs[chlen] = Serial.read();
+        chlen++;
+        if (chlen >= sizeof(chs)) break;
       }
       client.write(chs, chlen);
       if (ms0 < millis())
-	break; //最多2秒
+        break; //最多2秒
     }
   }
 }
