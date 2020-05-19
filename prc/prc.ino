@@ -161,10 +161,12 @@ void setup() {
   pinMode(LED, OUTPUT);
   digitalWrite(LED, HIGH);
   pinMode(NET_RESET, OUTPUT);
-  digitalWrite(NET_RESET, HIGH);
+  digitalWrite(NET_RESET, LOW);
   osc = OSCCAL;
   ds1820_search();
+  delay(100);
   ds1820_all();
+  digitalWrite(NET_RESET, HIGH);
   while (eeprom_read(CAL38400) == 0xff || eeprom_read(CAL38400) == 0) {
     check_rom();
     Serial.begin(115200);
@@ -436,14 +438,6 @@ void menu( uint8_t  stype) {
               ));
     s->print(F("n:change name:"));
     disp_name(s);
-    /*
-      s->println((char) eeprom_read(WATCHDOG_EN));
-      s->print(F("d-watchdog script set: "));
-      for (uint8_t i = WATCHDOG0; i <= WATCHDOG10; i++) {
-      ch = eeprom_read(i);
-      if (ch < 0x20 || ch > ('z' | 0x20)) break;
-      s->write(ch);
-      }*/
     s->println(F("\r\nq:quit"));
     if (s->readBytes(&ch, 1) != 1) {
       s->println(F("Bye!"));
@@ -521,51 +515,6 @@ void menu( uint8_t  stype) {
         if (ch == '<' && pwm > 10) pwm -= 10;
         analogWrite(PWM, pwm);
         break;
-      /*
-        case 'c':
-        case 'C':
-        s->print(F("input watchdog set[No, Min, Hour, Day]: "));
-        s_clean(s);
-        if (s->readBytes(&ch, 1) == 1) {
-        ch &= ~0x20; //a-z->A-Z
-        switch (ch) {
-          case 'N':
-          case 'M':
-          case 'H':
-          case 'D':
-            s->write(ch);
-            eeprom_write(WATCHDOG_EN, ch);
-            set_rom_check();
-        }
-        }
-        break;
-        case 'd':
-        case 'D':
-        s->print(F("please input watchdog scripts: "));
-        uint8_t i;
-        i = 0;
-        while (1) {
-        ch = s->read();
-        if (ch == 0xd || ch == 0xa) break;
-        switch (ch) {
-          case 'r':
-          case 'R':
-          case 'p':
-          case 'P':
-          case 'o':
-          case 'O':
-          case 'w':
-          case 'W':
-            s->write(ch);
-            eeprom_write(WATCHDOG0 + i, ch);
-            eeprom_write(WATCHDOG0 + i + 1, 0xff);
-            i++;
-            if (i > WATCHDOG_EN - WATCHDOG0) break;
-        }
-        set_rom_check();
-        }
-        break;
-      */
       case 'q':
       case 'Q':
         s->println(F("Bye!"));
