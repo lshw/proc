@@ -660,7 +660,7 @@ void ds1820_disp(Stream *s) {
     if (celsius[i] < -300 * 16) continue;
     if (ds_addr[i][0] == 0) break;
     if (n > 0) s->write(';');
-    s->print(F("C"));
+    s->write('C');
     if (ds1820_count > 1)
       for (uint8_t i0 = 5; i0 < 7; i0++) {
         if (ds_addr[i][i0] < 0x10) s->write('0');
@@ -668,6 +668,7 @@ void ds1820_disp(Stream *s) {
       }
     s->write('=');
     s->print((float) celsius[i] / 16.0);
+    s->print(F("℃"));
     n++;
   }
   s->println();
