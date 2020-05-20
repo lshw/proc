@@ -462,7 +462,6 @@ void menu( uint8_t  stype) {
       case 'N':
         s->print(F("please input name: "));
         eeprom_set_str(s, NAME0, NAME10);
-        set_rom_check();
       case 'r':
         pc_reset_on = 300;
         break;
@@ -478,7 +477,6 @@ void menu( uint8_t  stype) {
       case 'v':
         digitalWrite(_24V_OUT, !digitalRead(_24V_OUT));
         eeprom_write(VOUT_SET, digitalRead(_24V_OUT));
-        set_rom_check();
         break;
       case 'e':
       case 'E':
@@ -499,7 +497,14 @@ void menu( uint8_t  stype) {
         break;
       case 'b':
       case 'B':
-        eeprom_write(ROMCRC, eeprom_read(ROMCRC) + 1);
+	s->println(F("Restore Default Set True?!"));
+	if (s->readBytes(&ch, 1) == 1)
+	  if(ch=='y' || ch=='Y'){
+	    eeprom_write(MAC1, 0);
+
+	    check_rom();
+	  }
+	break;
       case 'a':
       case 'A':
         OSCCAL = osc;
@@ -635,33 +640,26 @@ void check_rom() {
   uint8_t sets[ROMLEN];
   for (i = 0; i < ROMLEN; i++) {
     sets[i] = eeprom_read(i);
-    if (i <= ROMCRC) ch += sets[i];
   }
-
+  if(sets[MAC0]==0xDE && sets[MAC1]==0xAD && sets[MAC2]==0xBE) return;
+  sets[MAC0] = 0xDE;
+  sets[MAC1] = 0xAD;
+  sets[MAC2] = 0xBE;
   addr = &sets[SN0];
-  if (ds1820_count == 1 && ds_addr[1][0] != 0)
+  if (ds1820_count == 1 && ds_addr[1][0] != 0) //只有一个1820,并且有效，复制1820的sn到sn
     for (i = 0; i < 8; i++) {
       addr[i] = ds_addr[1][i];
     }
-  if (OneWire::crc8(addr, 7) !=  (uint8_t)addr[7])  {//SN不对
-    if (OneWire::crc8(ds_addr[0], 7) == ds_addr[0][7])//当前SN有效
+  if (OneWire::crc8(addr, 7) !=  (uint8_t)addr[7])  {//SN不对 
+    if (OneWire::crc8(ds_addr[0], 7) == ds_addr[0][7]) {//但当前SN有效
       for (i = 0; i < 8; i++) {
-        addr[i] = ds_addr[0][i]; //复制当前SN
+	addr[i] = ds_addr[0][i]; //复制当前SN
       }
-    ch = 0xff;//重置ROM
+    }else{
+      sets[MAC5] = 1;
+      sets[MAC2] = 0;//SN都不对，先用DE:AD:00:xx:xx:xx,下次再试一下
+    }
   }
-  if (ch != 0) {
-    //set default
-    for (i = 0; i < 10; i++)
-      eeprom_write(SCRIPT_ADDR + SCRIPT_SIZE * i, 0); //清开机脚本
-    sets[MAC0] = 0xDE;
-    sets[MAC1] = 0xAD;
-    sets[MAC2] = 0xBE;
-    uint8_t * addr;
-    if (ds1820_count == 1 && ds_addr[1][0] != 0)
-      addr = ds_addr[1];
-    else
-      addr = ds_addr[0];
     sets[NAME0] = 'P';
     sets[NAME0 + 1] = 'R';
     sets[NAME0 + 2] = 'O';
@@ -719,15 +717,9 @@ void check_rom() {
     sets[REMOTE_PORT_H] = 1234 / 0x100;
     sets[REMOTE_PORT_L] = 1234 % 0x100;
     sets[PWM_NOW] = 128;
+    for (i = 0; i < 10; i++)
+      eeprom_write(SCRIPT_ADDR + SCRIPT_SIZE * i, 0); //清开机脚本
     for (i = 0; i < sizeof(sets); i++) eeprom_write(i, sets[i]);
-    set_rom_check();
-  }
-}
-void set_rom_check() {
-  uint8_t ch = 0;
-  for (uint8_t i = 0; i < ROMCRC; i++)
-    ch += eeprom_read(i);
-  eeprom_write(ROMCRC, 0 - ch);
 }
 void set_passwd(Stream *s) {
   uint32_t passwd, password;
@@ -755,7 +747,6 @@ void set_passwd(Stream *s) {
   s->println();
 
   eeprom_write_u32(PASSWD0, passwd);
-  set_rom_check();
 }
 
 //校准rc振荡器
@@ -823,7 +814,6 @@ void rc_calibration(uint8_t stype) {
           i = ( i - i0) / 2 + i0;
           OSCCAL = osc + i ;
           eeprom_write(get_cal(com_speed), osc + i);
-          set_rom_check();
           Serial.print(F("ok! calibration="));
           Serial.println(OSCCAL);
           if (stype != S_SERIAL) {
@@ -933,7 +923,6 @@ void info(uint8_t stype) {
           eeprom_write(IS_DHCP, 'N');
         else
           eeprom_write(IS_DHCP, 'Y');
-        set_rom_check();
         s_clean(s);
         break;
       case '2':
@@ -991,7 +980,6 @@ void save_set(uint16_t addr,  Stream *s) {
   ch = s->parseInt();
   s->println(ch);
   eeprom_write(addr + 3, ch);
-  set_rom_check();
 }
 void set_com_speed(Stream *s) {
   uint8_t ch;
@@ -1017,14 +1005,12 @@ void set_com_speed(Stream *s) {
     else speed1 = 300;
     s->println(speed1);
     eeprom_write_u32(SPEED0, speed1);
-    set_rom_check();
   }
   s_clean(s);
   s->print(F("data len(5-8): "));
   if (s->readBytes(&ch, 1) == 1)
     if (ch >= '5' &&  ch <= '8') {
       eeprom_write(DATA_LEN, ch);
-      set_rom_check();
     }
   delay(100);
   s_clean(s);
@@ -1035,14 +1021,12 @@ void set_com_speed(Stream *s) {
   if (ch == 'n') ch = 'N';
   if (ch == 'O' || ch == 'E' || ch == 'N') {
     eeprom_write(DATA_PARI, ch);
-    set_rom_check();
   }
   s_clean(s);
   s->print(F("\r\nstop len(1, 2): "));
   s->readBytes(&ch, 1);
   if (ch == '2' || ch == '1') {
     eeprom_write(STOP_LEN, ch);
-    set_rom_check();
   }
   s->print(F("set speed ok, "));
   disp_comset(s);
@@ -1316,5 +1300,4 @@ void disp_script( Stream * s, bool disp_zero) {
 
 void save_set() { //退出菜单时，保存pwm位置等设置
   eeprom_write(PWM_NOW, pwm);
-  set_rom_check();
 }
