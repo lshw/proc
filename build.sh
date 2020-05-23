@@ -1,4 +1,5 @@
 #!/bin/bash
+cd `dirname $0`
 branch=`git branch |grep "^\*" |awk '{print $2}'`
 a=`git rev-parse --short HEAD`
 date=`git log --date=short -1 |grep ^Date: |awk '{print $2}' |tr -d '-'`

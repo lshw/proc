@@ -1,11 +1,12 @@
 #include "commit.h"  //版本号
+//#define AUTOLINK_ENABLE  //autolink to remote enable ,
+//#define PWM 5     //pwn enable,
 #ifndef GIT_COMMIT_ID
 #define GIT_COMMIT_ID "test"
 #endif
 #define _24V_OUT 3
 #define PC_RESET A4
 #define PC_POWER A5
-#define PWM 5
 #define DS A3
 #define LED 13
 #define NET_RESET 4
@@ -19,8 +20,9 @@
 int16_t celsius[11];
 boolean alreadyConnected = false;
 EthernetClient client;
-uint8_t add_count = 0;
+#ifdef PWM
 uint8_t pwm;
+#endif
 //定时器最长65536秒 18小时
 uint16_t timer1 = 0; //秒 定时测温
 uint16_t timer2 = 0; //秒
@@ -125,10 +127,10 @@ enum
   PWM_NOW, //当前PWM位置
   ROMCRC,
   //后面的不做校验
-  REMOTE_CYCLE,
-  REMOTE_PORT_H,
+  REMOTE_CYCLE, //主动外联，重试周期
+  REMOTE_PORT_H, //主动外联端口
   REMOTE_PORT_L,
-  REMOTE_HOST,
+  REMOTE_HOST, //主动外联ip
   ROMLEN
 };
 #define SCRIPT_SIZE 50 //每个脚本的长度  ;
@@ -147,11 +149,15 @@ uint8_t get_cal(uint32_t speedx) {
       return CAL38400;
   }
 }
+#ifdef AUTOLINK_ENABLE
 uint8_t remote_cycle;
+#endif
 void setup() {
   uint8_t  mac[6];
+#ifdef PWM
   pwm = eeprom_read(PWM_NOW);
   analogWrite(PWM, pwm);
+#endif
   pinMode(_24V_OUT, OUTPUT);
   digitalWrite(_24V_OUT, HIGH); //默认24V开启输出
   pinMode(PC_RESET, OUTPUT);
@@ -176,10 +182,7 @@ void setup() {
   uint32_t com_speed = eeprom_read_u32(SPEED0);
   OSCCAL = eeprom_read(get_cal(com_speed));
   if (com_speed == 0) com_speed = 115200;
-  uint8_t com_set = get_comset();
-  Serial.begin(com_speed, com_set);
-  while (!Serial) ;
-  hello(&Serial);
+  Serial.begin(com_speed, get_comset());
   digitalWrite(_24V_OUT, eeprom_read(VOUT_SET));
   mac[0] = 0xde; //mac的第一位必须是偶数，否则就是广播地址
   mac[1] = 0xad;
@@ -208,26 +211,61 @@ void setup() {
   }
   if (dhcp_ok == false)
     Ethernet.begin(mac, ip, gateway, subnet); //dhcp==N 或者dhcp获取失败
-  Serial.print(F("\r\n#ip: "));
-  Serial.println(Ethernet.localIP());
-  Serial.println(F("#+++++[enter] into main menu"));
+  /*
+    Serial.print(F("\r\n#ip: "));
+    Serial.println(Ethernet.localIP());
+    Serial.println(F("#+++++[enter] into main menu"));
+  */
   server.begin();
   setup_watchdog(WDTO_30MS);
+#ifdef AUTOLINK_ENABLE
   remote_cycle = eeprom_read(REMOTE_CYCLE);
+#endif
+}
+bool magic_passwd() {
+  char ch;
+  uint8_t add_count = 0;
+  Serial.flush();
+  uint32_t ms;
+  ms = millis() + 10000;
+  while (ms > millis() && add_count <= 6) {
+    while (Serial.available()) {
+      ms = millis() + 10000;
+      ch = Serial.read();
+      if (ch == 0xd || ch == 0xa) {
+        if (add_count > 6) break;
+      } else if (ch == '+') {
+        add_count++;
+      }
+      else {
+        add_count = 0;
+      }
+    }
+  }
+  if (add_count < 6) return false;
+  ms = millis() + 10000;
+  add_count = 0;
+  while (ms > millis()) {
+    while (Serial.available()) {
+      ms = millis() + 10000;
+      ch = Serial.read();
+      if (ch == 0xd || ch == 0xa) {
+        if (add_count > 6) {
+          return true;
+        }
+      } else if (ch == 'U' || ch == 'u') {
+        add_count++;
+      }	else if (ch == '+') continue;
+      else {
+        add_count = 0;
+      }
+    }
+  }
+  return false;
 }
 EthernetClient clientn;
 void loop() {
   dogcount = 0;
-  clientn = server.available();
-
-  if (clientn) {//有新的连接进来
-    if ( alreadyConnected)
-      client.stop(); //有bye状态的老的连接，就先踢掉
-    else
-      alreadyConnected = true;
-
-    client = clientn;
-  }
 
   if (timer1 == 0) {
     timer1 = 60; //60秒测温一次
@@ -236,15 +274,15 @@ void loop() {
 
   clientn = server.available();
   if (clientn) {//有数据进来
-  if(clientn!=client) { 
-    //有新的连接进来
-    if ( alreadyConnected)
-      client.stop(); //有bye状态的老的连接，就先踢掉
-    alreadyConnected = true;
-    client = clientn;
+    if (clientn != client) {
+      //有新的连接进来
+      if ( alreadyConnected)
+        client.stop(); //有bye状态的老的连接，就先踢掉
+      alreadyConnected = true;
+      client = clientn;
     }
   }
-
+#ifdef AUTOLINK_ENABLE
   if (!alreadyConnected) { //无连接
     if (remote_cycle > 0 && timer2 == 0) { //如果服务器没有客户端接入，就试试远程
       timer2 = 60;
@@ -253,46 +291,31 @@ void loop() {
       remote_cycle = eeprom_read(REMOTE_CYCLE);
     }
   }
+#endif
 
   if (alreadyConnected) {
     if (!client.connected()) {
       client.stop();
       alreadyConnected = false;
-    }else {
+    } else {
       if (client.available() > 0) { //client tcp有数据进来
-	menu(S_TCP);
-	save_set();
+        menu(S_TCP);
+        save_set();
       }
+    }
+  } else {
+    if (magic_passwd()) {
+      menu(S_SERIAL);
+      save_set();
     }
   }
 
-  if (Serial.available() > 0) {
-    while (Serial.available()) {
-      switch (Serial.read()) {
-        case '+':
-          add_count++;
-          break;
-        case 0xd:
-        case 0xa:
-          if (add_count > 4) {
-            add_count = 0;
-            menu(S_SERIAL);
-            save_set();
-          }
-          break;
-        default:
-          if (add_count > 0 ) add_count = 0;
-          else if (add_count > -100) add_count--;
-      }
-      if (add_count == -99) break; //持续的串口超过100字节就退出去，不要让串口锁定造成服务器忙。
-    }
-  }
 }
 
 void com_shell() {
   char ch, chs[512];
+  uint8_t add_count = 0;
   uint16_t chlen = 0;
-  add_count = 0;
   if (!client.connected()) return;
   s_clean(&Serial);
   s_clean(&client);
@@ -394,7 +417,7 @@ void menu( uint8_t  stype) {
   else
     s = &client;
   hello(s);
-  s->setTimeout(10000);
+  s->setTimeout(20000);
   if ( stype != S_SERIAL) {
     password = eeprom_read_u32(PASSWD0);
     if (password != 0) {
@@ -423,8 +446,10 @@ void menu( uint8_t  stype) {
                "V:Vout= "));
     if (digitalRead(_24V_OUT) == HIGH) s->println(F("ON"));
     else s->println(F("OFF"));
+#ifdef PWM
     s->print(F("<,.> :PWM="));
     s->println(pwm);
+#endif
     s->println(F("===script 1-9===="));
     disp_script( s, false); //从0号开始显示
     s->print(F("===set===\r\n"
@@ -497,19 +522,20 @@ void menu( uint8_t  stype) {
         break;
       case 'b':
       case 'B':
-	s->println(F("Restore Default Set True?!"));
-	if (s->readBytes(&ch, 1) == 1)
-	  if(ch=='y' || ch=='Y'){
-	    eeprom_write(MAC1, 0);
+        s->println(F("Restore Default Set True?!"));
+        if (s->readBytes(&ch, 1) == 1)
+          if (ch == 'y' || ch == 'Y') {
+            eeprom_write(MAC1, 0);
 
-	    check_rom();
-	  }
-	break;
+            check_rom();
+          }
+        break;
       case 'a':
       case 'A':
         OSCCAL = osc;
         asm volatile ("  jmp 0"); //重启
         break;
+#ifdef PWM
       case '.':
         if (pwm < 255) pwm++;
       case ',':
@@ -520,6 +546,7 @@ void menu( uint8_t  stype) {
         if (ch == '<' && pwm > 10) pwm -= 10;
         analogWrite(PWM, pwm);
         break;
+#endif
       case 'q':
       case 'Q':
         s->println(F("Bye!"));
@@ -641,7 +668,7 @@ void check_rom() {
   for (i = 0; i < ROMLEN; i++) {
     sets[i] = eeprom_read(i);
   }
-  if(sets[MAC0]==0xDE && sets[MAC1]==0xAD && sets[MAC2]==0xBE) return;
+  if (sets[MAC0] == 0xDE && sets[MAC1] == 0xAD && sets[MAC2] == 0xBE) return;
   sets[MAC0] = 0xDE;
   sets[MAC1] = 0xAD;
   sets[MAC2] = 0xBE;
@@ -650,76 +677,76 @@ void check_rom() {
     for (i = 0; i < 8; i++) {
       addr[i] = ds_addr[1][i];
     }
-  if (OneWire::crc8(addr, 7) !=  (uint8_t)addr[7])  {//SN不对 
+  if (OneWire::crc8(addr, 7) !=  (uint8_t)addr[7])  {//SN不对
     if (OneWire::crc8(ds_addr[0], 7) == ds_addr[0][7]) {//但当前SN有效
       for (i = 0; i < 8; i++) {
-	addr[i] = ds_addr[0][i]; //复制当前SN
+        addr[i] = ds_addr[0][i]; //复制当前SN
       }
-    }else{
+    } else {
       sets[MAC5] = 1;
       sets[MAC2] = 0;//SN都不对，先用DE:AD:00:xx:xx:xx,下次再试一下
     }
   }
-    sets[NAME0] = 'P';
-    sets[NAME0 + 1] = 'R';
-    sets[NAME0 + 2] = 'O';
-    sets[NAME0 + 3] = 'C';
-    if (ds_addr[0] != 0) {
-      sets[MAC3] = addr[5];
-      sets[MAC4] = addr[6];
-      sets[MAC5] = addr[7];
-      sprintf(&sets[NAME0 + 4], "%02X%02X%02X\x0", addr[5], addr[6], addr[7]);
-    } else {
-      sets[MAC3] = 0;
-      sets[MAC4] = 1;
-      sets[MAC5] = 0x25;
-    }
-    if (sets[CAL115200] == 0 || sets[CAL115200] == 0xff) {
-      sets[CAL38400] = osc - 1;
-      sets[CAL57600] = osc - +1;
-      sets[CAL115200] = osc + 5;
-      sets[CAL230400] = osc - 10;
-    }
-    sets[IS_DHCP] = 'N';
-    sets[IP0] = 192;
-    sets[IP1] = 168;
-    sets[IP2] = 1;
-    sets[IP3] = 2;
-    sets[NETMARK0] = 255;
-    sets[NETMARK1] = 255;
-    sets[NETMARK2] = 255;
-    sets[NETMARK3] = 0;
-    sets[GW0] = 192;
-    sets[GW1] = 168;
-    sets[GW2] = 1;
-    sets[GW3] = 1;
-    sets[SPEED0] = 115200 >> 24;
-    sets[SPEED1] = 115200 >> 16;
-    sets[SPEED2] = 115200 >> 8;
-    sets[SPEED3] = 115200;
-    sets[DATA_LEN] = '8';
-    sets[DATA_PARI] = 'N';
-    sets[STOP_LEN] = '1';
-    sets[PASSWD0] = 0;
-    sets[PASSWD1] = 0;
-    sets[PASSWD2] = 0;
-    sets[PASSWD3] = 0;
-    sets[WATCHDOG_EN] = 'N';
-    sets[WATCHDOG0] = 'r';
-    sets[WATCHDOG1] = 'v';
-    sets[WATCHDOG2] = 'p';
-    sets[WATCHDOG3] = 'W';
-    sets[WATCHDOG4] = 'P';
-    sets[WATCHDOG5] = 'V';
-    sets[WATCHDOG6] = 0xff;
-    sets[REMOTE_HOST] = 0;
-    sets[REMOTE_CYCLE] = 0;
-    sets[REMOTE_PORT_H] = 1234 / 0x100;
-    sets[REMOTE_PORT_L] = 1234 % 0x100;
-    sets[PWM_NOW] = 128;
-    for (i = 0; i < 10; i++)
-      eeprom_write(SCRIPT_ADDR + SCRIPT_SIZE * i, 0); //清开机脚本
-    for (i = 0; i < sizeof(sets); i++) eeprom_write(i, sets[i]);
+  sets[NAME0] = 'P';
+  sets[NAME0 + 1] = 'R';
+  sets[NAME0 + 2] = 'O';
+  sets[NAME0 + 3] = 'C';
+  if (ds_addr[0] != 0) {
+    sets[MAC3] = addr[5];
+    sets[MAC4] = addr[6];
+    sets[MAC5] = addr[7];
+    sprintf(&sets[NAME0 + 4], "%02X%02X%02X\x0", addr[5], addr[6], addr[7]);
+  } else {
+    sets[MAC3] = 0;
+    sets[MAC4] = 1;
+    sets[MAC5] = 0x25;
+  }
+  if (sets[CAL115200] == 0 || sets[CAL115200] == 0xff) {
+    sets[CAL38400] = osc - 1;
+    sets[CAL57600] = osc - +1;
+    sets[CAL115200] = osc + 5;
+    sets[CAL230400] = osc - 10;
+  }
+  sets[IS_DHCP] = 'N';
+  sets[IP0] = 192;
+  sets[IP1] = 168;
+  sets[IP2] = 1;
+  sets[IP3] = 2;
+  sets[NETMARK0] = 255;
+  sets[NETMARK1] = 255;
+  sets[NETMARK2] = 255;
+  sets[NETMARK3] = 0;
+  sets[GW0] = 192;
+  sets[GW1] = 168;
+  sets[GW2] = 1;
+  sets[GW3] = 1;
+  sets[SPEED0] = 115200 >> 24;
+  sets[SPEED1] = 115200 >> 16;
+  sets[SPEED2] = 115200 >> 8;
+  sets[SPEED3] = 115200;
+  sets[DATA_LEN] = '8';
+  sets[DATA_PARI] = 'N';
+  sets[STOP_LEN] = '1';
+  sets[PASSWD0] = 0;
+  sets[PASSWD1] = 0;
+  sets[PASSWD2] = 0;
+  sets[PASSWD3] = 0;
+  sets[WATCHDOG_EN] = 'N';
+  sets[WATCHDOG0] = 'r';
+  sets[WATCHDOG1] = 'v';
+  sets[WATCHDOG2] = 'p';
+  sets[WATCHDOG3] = 'W';
+  sets[WATCHDOG4] = 'P';
+  sets[WATCHDOG5] = 'V';
+  sets[WATCHDOG6] = 0xff;
+  sets[REMOTE_HOST] = 0; //主动外联服务器地址，默认为空
+  sets[REMOTE_CYCLE] = 0;
+  sets[REMOTE_PORT_H] = 1234 / 0x100;
+  sets[REMOTE_PORT_L] = 1234 % 0x100;
+  sets[PWM_NOW] = 128;
+  for (i = 0; i < 10; i++)
+    eeprom_write(SCRIPT_ADDR + SCRIPT_SIZE * i, 0); //清开机脚本
+  for (i = 0; i < sizeof(sets); i++) eeprom_write(i, sets[i]);
 }
 void set_passwd(Stream *s) {
   uint32_t passwd, password;
@@ -778,8 +805,7 @@ void rc_calibration(uint8_t stype) {
   disp_comset(s);
   s->println(F("),  Press the 'U' key and hold...."));
   s->flush();
-  uint8_t com_set = get_comset();
-  Serial.begin(com_speed, com_set);
+  Serial.begin(com_speed, get_comset());
   s_clean(&Serial);
   while (Serial.available() < 10) ;
   s_clean(&Serial);
@@ -884,9 +910,10 @@ void info(uint8_t stype) {
         if (i < 3)      s->write('.');
       }
     } else {
+#ifdef AUTOLINK_ENABLE
       s->print(F("\r\n5.REMOTE ENABLE: "));
       remote_cycle = eeprom_read(REMOTE_CYCLE);
-      if (remote_cycle == 0) s->print(F("Disable"));
+      if (remote_cycle == 0) s->print(F("Disable")); //autolink  default Disable
       else {
         s->print(remote_cycle);
         s->print(F(" minute"));
@@ -902,6 +929,7 @@ void info(uint8_t stype) {
         i = (i << 8) | eeprom_read(REMOTE_PORT_L);
         s->print(i);
       }
+#endif
     }
     s->println(F("\r\nplease select(1-7, q):"));
     dogcount = 0;
@@ -937,6 +965,7 @@ void info(uint8_t stype) {
         s->print(F("please input gateway: "));
         save_set(GW0, s);
         break;
+#ifdef AUTOLINK_ENABLE
       case '5':
         s->print(F("please input cycle(minutes, 0=disable): "));
         ch = s->parseInt();
@@ -956,6 +985,7 @@ void info(uint8_t stype) {
         eeprom_write(REMOTE_PORT_H, i / 0x100);
         eeprom_write(REMOTE_PORT_L, i & 0xFF);
         break;
+#endif
       case 'q':
       case 'Q':
       case 0x1b:
@@ -1116,6 +1146,7 @@ void hello(Stream *s) {
   s->print(F("\r\n#"));
   ds1820_disp(s);
 }
+#ifdef AUTOLINK_ENABLE
 void remote_link() {
   char hostname[30];
   uint8_t i;
@@ -1125,6 +1156,7 @@ void remote_link() {
   }
   client.connect(hostname, (uint16_t)(eeprom_read(REMOTE_PORT_H) << 8) | eeprom_read(REMOTE_PORT_L));
 }
+#endif
 void disp_name(Stream * s) {
   char ch;
   for (uint16_t i = NAME0; i <= NAME10; i++) {
@@ -1228,6 +1260,7 @@ void run_script( Stream * s, uint8_t script_n) {
           delay(n);
         }
         break;
+#ifdef PWM
       case 'm':
       case 'M':
         if (next_is_number(eeprom_addr)) {
@@ -1237,6 +1270,7 @@ void run_script( Stream * s, uint8_t script_n) {
           analogWrite(PWM, pwm);
         }
         break;
+#endif
     }
     eeprom_addr++;
     ch = eeprom_read(eeprom_addr);
@@ -1299,5 +1333,7 @@ void disp_script( Stream * s, bool disp_zero) {
 }
 
 void save_set() { //退出菜单时，保存pwm位置等设置
+#ifdef PWM
   eeprom_write(PWM_NOW, pwm);
+#endif
 }
