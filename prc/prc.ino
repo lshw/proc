@@ -810,7 +810,9 @@ void rc_calibration(uint8_t stype) {
   s_clean(&Serial);
   uint8_t b = 0;
   while (b == 0) {
-    for (i = -40; i < 40; i++) {
+    for (i = -80; i < 80; i++) {
+      if(osc <= -i) i=-osc;
+      if(osc > 256-i) break;
       OSCCAL = osc + i;
       s_clean(&Serial);
       Serial.readBytes(&ch, 1);
@@ -827,7 +829,8 @@ void rc_calibration(uint8_t stype) {
     }
   }
   while (b == 1) {
-    for (i = i0; i < 40; i++) {
+    for (i = i0; i < 80; i++) {
+      if(osc > 256-i) break;
       OSCCAL = osc + i;
       s_clean(&Serial);
       Serial.readBytes(&ch, 1);
