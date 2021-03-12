@@ -197,7 +197,6 @@ void setup() {
   bool dhcp_ok = false;
   while (Serial.available()) Serial.read();
   if (eeprom_read(IS_DHCP) != 'N' ) {
-    Serial.print(F("\r\n#Use DHCP to get ip, please wait..."));
     for (uint8_t i = 0; i < 6; i++) {
       if (Serial.available()) break;
       delay(300);
