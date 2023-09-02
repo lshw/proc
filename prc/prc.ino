@@ -1,4 +1,3 @@
-#include "commit.h"  //版本号
 //#define AUTOLINK_ENABLE  //autolink to remote enable ,
 //#define PWM 5     //pwn enable,
 #ifndef GIT_COMMIT_ID
@@ -1133,9 +1132,31 @@ void s_clean(Stream * s) {
   delay(10);
   while (s->available()) s->read();
 }
+
+#define __YEAR__ ((((__DATE__[7]-'0')*10+(__DATE__[8]-'0'))*10 \
+                   +(__DATE__[9]-'0'))*10+(__DATE__[10]-'0'))
+
+#define __MONTH__ (__DATE__[2]=='n'?(__DATE__[1]=='a'?1:6)  /*Jan:Jun*/ \
+                   : __DATE__[2] == 'b' ? 2 \
+                   : __DATE__[2] == 'r' ? (__DATE__[0] == 'M' ? 3 : 4) \
+                   : __DATE__[2] == 'y' ? 5 \
+                   : __DATE__[2] == 'l' ? 7 \
+                   : __DATE__[2] == 'g' ? 8 \
+                   : __DATE__[2] == 'p' ? 9 \
+                   : __DATE__[2] == 't' ? 10 \
+                   : __DATE__[2] == 'v' ? 11 : 12)
+
+#define __DAY__ ((__DATE__[4]==' '?0:__DATE__[4]-'0')*10 \
+                 +(__DATE__[5]-'0'))
+
 void hello(Stream *s) {
   uint8_t ch;
-  s->print(F("\r\n#DOC HTTPS://bjlx.org.cn/node/914\r\n#Ver:PROC-V1-" GIT_COMMIT_ID  "\r\n#name:"));
+  char buf[sizeof("2023-09-02")];
+  s->print(F("\r\n#DOC HTTPS://bjlx.org.cn/node/914\r\n#Ver:PROC-V1-" GIT_VER  "\r\n#Buile Set:'" BUILD_SET "'\r\n#Build Time:"));
+  snprintf_P(buf,sizeof(buf),PSTR("%04d-%02d-%02d"),__YEAR__,__MONTH__,__DAY__);
+  s->print(buf);
+  s->println(F(" "__TIME__));
+  s->print(F("#name:"));
   disp_name(s);
   s->print(F("\r\n#SN:"));
   for (uint8_t i = 0; i < sizeof(ds_addr[0]); i++) {
