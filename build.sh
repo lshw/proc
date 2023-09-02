@@ -1,20 +1,95 @@
 #!/bin/bash
 cd `dirname $0`
-branch=`git branch |grep "^\*" |awk '{print $2}'`
+
+me=`whoami`
+if [ "$me" == "root" ] ; then
+  home=/home/liushiwei
+else
+  home=~
+fi
+
+if [ -x $home/sketchbook/libraries ] ; then
+ sketchbook=$home/sketchbook
+else
+ sketchbook=$home/Arduino
+fi
+
+arduino=/opt/arduino-1.8.19
+if ! [ -x $arduino/arduino ] ; then
+ echo install arduino to $arduino ?
+ read yes
+ if [ "a$yes" == 'ay' ] ; then
+  wget "https://downloads.arduino.cc/arduino-1.8.19-linux64.tar.xz" -c  -O /opt/arduino-1.8.19-linux64.tar.xz
+  tar Jxvf /opt/arduino-1.8.19-linux64.tar.xz -C /opt
+ fi
+fi
+astyle  --options=$arduino/lib/formatter.conf ../prc/*.h ../prc/*.ino
+rm -f ../prc/*.orig
 a=`git rev-parse --short HEAD`
 date=`git log --date=short -1 |grep ^Date: |awk '{print $2}' |tr -d '-'`
 ver=$date-${a:0:7}
 echo $ver
 export COMMIT=$ver
 
-echo "#define GIT_COMMIT_ID \"$ver\"" > prc/commit.h
+arduinoset=$home/.arduino15
+mkdir -p /tmp/${me}_build /tmp/${me}_cache
 
-mkdir /tmp/build -p
-/opt/arduino-1.8.12/arduino-builder -dump-prefs -logger=machine -hardware /opt/arduino-1.8.12/hardware -hardware /home/liushiwei/.arduino15/packages -tools /opt/arduino-1.8.12/tools-builder -tools /opt/arduino-1.8.12/hardware/tools/avr -tools /home/liushiwei/.arduino15/packages -built-in-libraries /opt/arduino-1.8.12/libraries -libraries /home/liushiwei/sketchbook/libraries -fqbn=m328pb:avr:atmega328pbic:speed=8mhz -vid-pid=0403_6001 -ide-version=10812 -build-path /tmp/build -warnings=none -build-cache /tmp/arduino_cache_191088 -prefs=build.warn_data_percentage=75 -prefs=runtime.tools.avr-gcc.path=/home/liushiwei/.arduino15/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino5 -prefs=runtime.tools.avr-gcc-7.3.0-atmel3.6.1-arduino5.path=/home/liushiwei/.arduino15/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino5 -prefs=runtime.tools.arduinoOTA.path=/home/liushiwei/.arduino15/packages/arduino/tools/arduinoOTA/1.3.0 -prefs=runtime.tools.arduinoOTA-1.3.0.path=/home/liushiwei/.arduino15/packages/arduino/tools/arduinoOTA/1.3.0 -prefs=runtime.tools.avrdude.path=/home/liushiwei/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17 -prefs=runtime.tools.avrdude-6.3.0-arduino17.path=/home/liushiwei/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17 -verbose /home/liushiwei/sketchbook/prc/prc/prc.ino
-/opt/arduino-1.8.12/arduino-builder -compile -logger=machine -hardware /opt/arduino-1.8.12/hardware -hardware /home/liushiwei/.arduino15/packages -tools /opt/arduino-1.8.12/tools-builder -tools /opt/arduino-1.8.12/hardware/tools/avr -tools /home/liushiwei/.arduino15/packages -built-in-libraries /opt/arduino-1.8.12/libraries -libraries /home/liushiwei/sketchbook/libraries -fqbn=m328pb:avr:atmega328pbic:speed=8mhz -vid-pid=0403_6001 -ide-version=10812 -build-path /tmp/build -warnings=none -build-cache /tmp/arduino_cache_191088 -prefs=build.warn_data_percentage=75 -prefs=runtime.tools.avr-gcc.path=/home/liushiwei/.arduino15/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino5 -prefs=runtime.tools.avr-gcc-7.3.0-atmel3.6.1-arduino5.path=/home/liushiwei/.arduino15/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino5 -prefs=runtime.tools.arduinoOTA.path=/home/liushiwei/.arduino15/packages/arduino/tools/arduinoOTA/1.3.0 -prefs=runtime.tools.arduinoOTA-1.3.0.path=/home/liushiwei/.arduino15/packages/arduino/tools/arduinoOTA/1.3.0 -prefs=runtime.tools.avrdude.path=/home/liushiwei/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17 -prefs=runtime.tools.avrdude-6.3.0-arduino17.path=/home/liushiwei/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17 -verbose /home/liushiwei/sketchbook/prc/prc/prc.ino |tee /tmp/info_wifi.log
-cp /tmp/build/prc.ino.hex .
-if [ $? == 0 ] ; then
-/home/liushiwei/.arduino15/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino5/bin/avr-size /tmp/build/prc.ino.elf |head -n 5
- grep "Global vari" /tmp/info_wifi.log |awk -F[ '{printf $2}'|tr -d ']'|awk -F' ' '{print "内存：使用"$1"字节,"$3"%,剩余:"$4"字节"}'
- grep "Sketch uses" /tmp/info_wifi.log |awk -F[ '{printf $2}'|tr -d ']'|awk -F' ' '{print "ROM：使用"$1"字节,"$3"%"}'
+#开发板:Arduino AVR Boards -> Arduino Pro or Pro Mini
+#处理器:Atmega328P(3.3V,8Mhz) 
+fqbn="arduino:avr:pro:cpu=8MHzatmega328"
+
+#fqbn="m328pb:avr:atmega328pbic:speed=8mhz"
+
+#传递宏定义 GIT_VER 到源码中，源码git版本
+CXXFLAGS="-DGIT_VER=\"$ver\" -DBUILD_SET=\"$fqbn\""
+$arduino/arduino-builder \
+-dump-prefs \
+-logger=machine \
+-hardware $arduino/hardware \
+-hardware $arduinoset/packages \
+-tools $arduino/tools-builder \
+-tools $arduino/hardware/tools/avr \
+-tools $arduinoset/packages \
+-built-in-libraries $arduino/libraries \
+-libraries $sketchbook/libraries \
+-fqbn=$fqbn \
+-ide-version=10819 \
+-build-path /tmp/${me}_build \
+-warnings=none \
+-prefs build.extra_flags="$CXXFLAGS" \
+-build-cache /tmp/${me}_cache \
+-prefs=build.warn_data_percentage=75 \
+-verbose \
+./prc/prc.ino
+if [ $? != 0 ] ; then
+  exit
+fi
+rm -f /tmp/${me}_build/prc.ino.bin
+$arduino/arduino-builder \
+-compile \
+-logger=machine \
+-hardware $arduino/hardware \
+-hardware $arduinoset/packages \
+-tools $arduino/tools-builder \
+-tools $arduino/hardware/tools/avr \
+-tools $arduinoset/packages \
+-built-in-libraries $arduino/libraries \
+-libraries $sketchbook/libraries \
+-fqbn=$fqbn \
+-ide-version=10819 \
+-build-path /tmp/${me}_build \
+-warnings=none \
+-prefs build.extra_flags="$CXXFLAGS" \
+-build-cache /tmp/${me}_cache \
+-prefs=build.warn_data_percentage=75 \
+-verbose \
+./prc/prc.ino |tee /tmp/${me}_info.log
+
+if [ -e /tmp/${me}_build/prc.ino.hex ] ; then
+
+  grep "Global vari" /tmp/${me}_info.log |sed -n "s/^.* \[\([0-9]*\) \([0-9]*\) \([0-9]*\) \([0-9]*\)\].*$/RAM:使用\1字节(\3%),剩余\4字节/p"
+  grep "Sketch uses" /tmp/${me}_info.log |sed -n "s/^.* \[\([0-9]*\) \([0-9]*\) \([0-9]*\)\].*$/ROM:使用\1字节(\3%)/p"
+  echo ver:$ver
+
+  cp -a /tmp/${me}_build/prc.ino.hex .
 fi
