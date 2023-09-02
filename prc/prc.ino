@@ -170,6 +170,8 @@ void setup() {
   osc = OSCCAL;
   ds1820_search();
   delay(100);
+  ds1820_start();
+  delay(600);
   ds1820_all();
   digitalWrite(NET_RESET, HIGH);
   while (eeprom_read(CAL38400) == 0xff || eeprom_read(CAL38400) == 0) {
@@ -261,9 +263,11 @@ bool magic_passwd() {
 EthernetClient clientn;
 void loop() {
   dogcount = 0;
-
+  if(timer1 == 1) {//60秒测温一次
+  ds1820_start();
+  }
   if (timer1 == 0) {
-    timer1 = 60; //60秒测温一次
+    timer1 = 60; //测温ok
     ds1820_all();
   }
 
@@ -592,8 +596,6 @@ void ds1820_start() {
   ds.write(0x44, 1);        // start conversion, with parasite power on at the end
 }
 void ds1820_all() {
-  ds1820_start();
-  delay(800);
   for (uint8_t i = 0; i < 11; i++) {
     if (ds_addr[i][0] != 0 ) ds1820(i);
   }
@@ -698,7 +700,7 @@ void check_rom() {
   }
   if (sets[CAL115200] == 0 || sets[CAL115200] == 0xff) {
     sets[CAL38400] = osc - 1;
-    sets[CAL57600] = osc - +1;
+    sets[CAL57600] = osc + 1;
     sets[CAL115200] = osc + 5;
     sets[CAL230400] = osc - 10;
   }
