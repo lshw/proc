@@ -183,7 +183,7 @@ void setup() {
   if (com_speed == 0) com_speed = 115200;
   Serial.begin(com_speed, get_comset());
   digitalWrite(_24V_OUT, eeprom_read(VOUT_SET));
-  mac[0] = 0xde; //mac的第一位必须是偶数，否则就是广播地址
+  mac[0] = 0xdc; //mac的第一位必须是偶数，否则就是广播地址
   mac[1] = 0xad;
   mac[2] = 0xbe;
   mac[3] = eeprom_read(MAC3);
@@ -666,8 +666,8 @@ void check_rom() {
   for (i = 0; i < ROMLEN; i++) {
     sets[i] = eeprom_read(i);
   }
-  if (sets[MAC0] == 0xDE && sets[MAC1] == 0xAD && sets[MAC2] == 0xBE) return;
-  sets[MAC0] = 0xDE;
+  if (sets[MAC0] == 0xDC && sets[MAC1] == 0xAD && sets[MAC2] == 0xBE) return;
+  sets[MAC0] = 0xDC;
   sets[MAC1] = 0xAD;
   sets[MAC2] = 0xBE;
   addr = &sets[SN0];
