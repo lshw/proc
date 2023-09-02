@@ -199,13 +199,10 @@ void setup() {
     for (uint8_t i = 0; i < 6; i++) {
       if (Serial.available()) break;
       delay(300);
-      Serial.write('.');
     }
     if (!Serial.available()) {
       dhcp_ok = Ethernet.begin(mac);
-      if (dhcp_ok) Serial.println(F("OK!"));
-      else Serial.println(F("Failure."));
-    } else Serial.println(F("Quit."));
+    }
   }
   if (dhcp_ok == false)
     Ethernet.begin(mac, ip, gateway, subnet); //dhcp==N 或者dhcp获取失败
