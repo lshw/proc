@@ -1,3 +1,8 @@
+/*
+bootloader 以 "pro mini 为基础，融丝H,L,E从FF，DA，FD 改成 C2 DA FD"，从外置晶振8Mhz，改成RC8Mhz
+把arduino例子里的arduinoISP写到一个uno里， 然后，临时插上一个8M晶振，10->reset(update-左脚),11->MOSI,12->MISO,13-CLK,GND-GND,VCC->5Vin
+然后编程器选 "Arduino as ISP",点"工具"->"烧录引导程序"
+*/
 //#define AUTOLINK_ENABLE  //autolink to remote enable ,
 //#define PWM 5     //pwn enable,
 #ifndef GIT_COMMIT_ID
