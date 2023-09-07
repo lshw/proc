@@ -1,7 +1,7 @@
 /*
-bootloader 以 "pro mini 为基础，融丝H,L,E从FF，DA，FD 改成 C2 DA FD"，从外置晶振8Mhz，改成RC8Mhz
-把arduino例子里的arduinoISP写到一个uno里， 然后，临时插上一个8M晶振，10->reset(update-左脚),11->MOSI,12->MISO,13-CLK,GND-GND,VCC->5Vin
-然后编程器选 "Arduino as ISP",点"工具"->"烧录引导程序"
+  bootloader 以 "pro mini 为基础，融丝H,L,E从FF，DA，FD 改成 C2 DA FD"，从外置晶振8Mhz，改成RC8Mhz
+  把arduino例子里的arduinoISP写到一个uno里， 然后，临时插上一个8M晶振，10->reset(update-左脚),11->MOSI,12->MISO,13-CLK,GND-GND,VCC->5Vin
+  然后编程器选 "Arduino as ISP",点"工具"->"烧录引导程序"
 */
 //#define AUTOLINK_ENABLE  //autolink to remote enable ,
 //#define PWM 5     //pwn enable,
@@ -268,8 +268,8 @@ bool magic_passwd() {
 EthernetClient clientn;
 void loop() {
   dogcount = 0;
-  if(timer1 == 1) {//60秒测温一次
-  ds1820_start();
+  if (timer1 == 1) { //60秒测温一次
+    ds1820_start();
   }
   if (timer1 == 0) {
     timer1 = 60; //测温ok
@@ -814,8 +814,8 @@ void rc_calibration(uint8_t stype) {
   uint8_t b = 0;
   while (b == 0) {
     for (i = -80; i < 80; i++) {
-      if(osc <= -i) i=-osc;
-      if(osc > 256-i) break;
+      if (osc <= -i) i = -osc;
+      if (osc > 256 - i) break;
       OSCCAL = osc + i;
       s_clean(&Serial);
       Serial.readBytes(&ch, 1);
@@ -833,7 +833,7 @@ void rc_calibration(uint8_t stype) {
   }
   while (b == 1) {
     for (i = i0; i < 80; i++) {
-      if(osc > 256-i) break;
+      if (osc > 256 - i) break;
       OSCCAL = osc + i;
       s_clean(&Serial);
       Serial.readBytes(&ch, 1);
@@ -1157,7 +1157,7 @@ void hello(Stream *s) {
   uint8_t ch;
   char buf[sizeof("2023-09-02")];
   s->print(F("\r\n#DOC HTTPS://bjlx.org.cn/node/914\r\n#Ver:PROC-V1-" GIT_VER  "\r\n#Buile Set:'" BUILD_SET "'\r\n#Build Time:"));
-  snprintf_P(buf,sizeof(buf),PSTR("%04d-%02d-%02d"),__YEAR__,__MONTH__,__DAY__);
+  snprintf_P(buf, sizeof(buf), PSTR("%04d-%02d-%02d"), __YEAR__, __MONTH__, __DAY__);
   s->print(buf);
   s->println(F(" "__TIME__));
   s->print(F("#name:"));
