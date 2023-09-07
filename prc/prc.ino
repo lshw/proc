@@ -181,8 +181,6 @@ void setup() {
   digitalWrite(NET_RESET, HIGH);
   while (eeprom_read(CAL38400) == 0xff || eeprom_read(CAL38400) == 0) {
     check_rom();
-    Serial.begin(115200);
-    rc_calibration(&Serial);
   }
   check_rom();
   uint32_t com_speed = eeprom_read_u32(SPEED0);
@@ -521,8 +519,8 @@ void menu( uint8_t  stype) {
         break;
       case 'z':
       case 'Z':
-        if (millis() < 200000)
-          rc_calibration(stype);
+        if (millis() < 200000 && stype != S_SERIAL)
+          rc_calibration();
         break;
       case 'b':
       case 'B':
@@ -779,7 +777,7 @@ void set_passwd(Stream *s) {
 }
 
 //校准rc振荡器
-void rc_calibration(uint8_t stype) {
+void rc_calibration() {
   uint8_t osc1, osc0 = OSCCAL;
   uint8_t oscs[256];
   int8_t i, i0;
@@ -787,26 +785,23 @@ void rc_calibration(uint8_t stype) {
   uint32_t com_speed;
   Stream *s;
   memset(oscs, 0, sizeof(oscs));
-  if (stype == S_SERIAL)
-    s = &Serial;
-  else
-    s = &client;
+  s = &client;
   com_speed = eeprom_read_u32(SPEED0);
-  s->print(F("osc="));
-  s->print(osc);
-  s->print(F(", CAL38400="));
-  s->print(eeprom_read(CAL38400));
-  s->print(F(", CAL57600="));
-  s->print(eeprom_read(CAL57600));
-  s->print(F(", CAL115200="));
-  s->print(eeprom_read(CAL115200));
-  s->print(F(", CAL230400="));
-  s->println(eeprom_read(CAL230400));
+  client.print(F("osc="));
+  client.print(osc);
+  client.print(F(", CAL38400="));
+  client.print(eeprom_read(CAL38400));
+  client.print(F(", CAL57600="));
+  client.print(eeprom_read(CAL57600));
+  client.print(F(", CAL115200="));
+  client.print(eeprom_read(CAL115200));
+  client.print(F(", CAL230400="));
+  client.println(eeprom_read(CAL230400));
 
-  s->print(F("\r\nOn the Serial console("));
+  client.print(F("\r\nOn the Serial console("));
   disp_comset(s);
-  s->println(F("),  Press the 'U' key and hold...."));
-  s->flush();
+  client.println(F("),  Press the 'U' key and hold...."));
+  client.flush();
   Serial.begin(com_speed, get_comset());
   s_clean(&Serial);
   while (Serial.available() < 10) ;
@@ -819,6 +814,7 @@ void rc_calibration(uint8_t stype) {
       OSCCAL = osc + i;
       s_clean(&Serial);
       Serial.readBytes(&ch, 1);
+      digitalWrite(LED, !digitalRead(LED));
       if (ch == 'U' || ch == 'u') {
         delay(100);
         s_clean(&Serial);
@@ -837,6 +833,7 @@ void rc_calibration(uint8_t stype) {
       OSCCAL = osc + i;
       s_clean(&Serial);
       Serial.readBytes(&ch, 1);
+      digitalWrite(LED, !digitalRead(LED));
       if (ch != 'u' &&  ch != 'U') {
         delay(100);
         s_clean(&Serial);
@@ -847,18 +844,17 @@ void rc_calibration(uint8_t stype) {
           eeprom_write(get_cal(com_speed), osc + i);
           Serial.print(F("ok! calibration="));
           Serial.println(OSCCAL);
-          if (stype != S_SERIAL) {
-            client.print(F("ok! calibration="));
-            client.println(OSCCAL);
-            client.print(osc);
-            if (OSCCAL > osc) {
-              client.write('+');
-              client.println(OSCCAL - osc);
-            } else {
-              client.write('-');
-              client.println(osc - OSCCAL);
-            }
+          client.print(F("ok! calibration="));
+          client.println(OSCCAL);
+          client.print(osc);
+          if (OSCCAL > osc) {
+            client.write('+');
+            client.println(OSCCAL - osc);
+          } else {
+            client.write('-');
+            client.println(osc - OSCCAL);
           }
+          digitalWrite(LED, LOW);
           delay(1000);
           return;
         }
