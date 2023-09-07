@@ -23,8 +23,8 @@ if ! [ -x $arduino/arduino ] ; then
   tar Jxvf /opt/arduino-1.8.19-linux64.tar.xz -C /opt
  fi
 fi
-astyle  --options=$arduino/lib/formatter.conf ../prc/*.h ../prc/*.ino
-rm -f ../prc/*.orig
+astyle  --options=$arduino/lib/formatter.conf ./prc/*.ino
+rm -f ./prc/*.orig
 a=`git rev-parse --short HEAD`
 date=`git log --date=short -1 |grep ^Date: |awk '{print $2}' |tr -d '-'`
 ver=$date-${a:0:7}
