@@ -3,6 +3,7 @@
   把arduino例子里的arduinoISP写到一个uno里， 然后，临时插上一个8M晶振，10->reset(update-左脚),11->MOSI,12->MISO,13-CLK,GND-GND,VCC->5Vin
   然后编程器选 "Arduino as ISP",点"工具"->"烧录引导程序"
 */
+
 //#define AUTOLINK_ENABLE  //autolink to remote enable ,
 //#define PWM 5     //pwn enable,
 #ifndef GIT_COMMIT_ID
@@ -55,6 +56,9 @@ void eeprom_write_u32(uint16_t addr, uint32_t data) {
   eeprom_write(addr + 2, (data >> 8) & 0xff);
   eeprom_write(addr + 3, data & 0xff);
 }
+
+uint8_t goto_bootloader __attribute__ ((section (".noinit"))); //需要进入bootloader
+uint8_t goto_bootloader_crc __attribute__ ((section (".noinit")));
 
 uint8_t ds_addr[11][8];
 OneWire ds(DS);
@@ -410,10 +414,15 @@ void setup_watchdog(int ii) {
   WDTCSR |= _BV(WDIE);
 }
 uint8_t vout;
+uint8_t pwm = 128;
 void menu( uint8_t  stype) {
   uint32_t passwd, password;
   uint8_t ch;
   Stream *s;
+#ifdef PWM
+  pinMode(PWM, OUTPUT);
+  analogWrite(PWM, pwm);
+#endif
   if (stype == S_SERIAL)
     s = &Serial;
   else
@@ -465,9 +474,44 @@ void menu( uint8_t  stype) {
               ));
     s->print(F("n:change name:"));
     disp_name(s);
-    s->println(F("\r\nq:quit"));
+    s->print(F("\r\nr-reset (300ms)\r\n"
+               "R-reset (5 sec)\r\n"
+               "p-powerdown(300ms)\r\n"
+               "P-powerdown(5 sec)\r\n"
+#ifdef PWM
+               "m-PWM-10\r\n"
+               "M-PWM+10\r\n"
+#endif
+               "4-set Vout to "));
+    if (digitalRead(_24V_OUT) == HIGH) s->print(F("Off"));
+    else s->print(F("On"));
+    s->print(F("(3 sec)\r\n"
+               "5-set Vout to "));
+    if (digitalRead(_24V_OUT) == HIGH) s->println(F("Off"));
+    else s->println(F("On"));
+    s->print(F("6-setpasswd\r\n"
+               "7-network info &  modi\r\n"
+               "8-com set\r\n"
+               /*      "9-com speed calibration\r\n" */
+               "a-reboot\r\n"
+               "b-restore default set\r\n"
+               /*
+                 "c-watchdog set: "*/));
+    /*
+      s->println((char) eeprom_read(WATCHDOG_EN));
+      s->print(F("d-watchdog script set: "));
+      for (uint8_t i = WATCHDOG0; i <= WATCHDOG10; i++) {
+      ch = eeprom_read(i);
+      if (ch < 0x20 || ch > ('z' | 0x20)) break;
+      s->write(ch);
+      }*/
+    s->println(F("\r\nq-quit"));
     if (s->readBytes(&ch, 1) != 1) {
       s->println(F("Bye!"));
+#ifdef PWM
+      pinMode(PWM, INPUT);
+      digitalWrite(PWM, HIGH);
+#endif
       return;
     }
     s->println();
