@@ -3,7 +3,7 @@
   把arduino例子里的arduinoISP写到一个uno里， 然后，临时插上一个8M晶振，10->reset(update-左脚),11->MOSI,12->MISO,13-CLK,GND-GND,VCC->5Vin
   然后编程器选 "Arduino as ISP",点"工具"->"烧录引导程序"
 
-编译时， 需要安装OneWire库， maintainer=Paul Stoffregen
+  编译时， 需要安装OneWire库， maintainer=Paul Stoffregen
 */
 
 //#define AUTOLINK_ENABLE  //autolink to remote enable ,
@@ -32,7 +32,6 @@ EthernetClient client;
 uint8_t pwm;
 #endif
 //定时器最长65536秒 18小时
-uint16_t timer1 = 0; //秒 定时测温
 uint16_t timer2 = 0; //秒
 uint16_t volatile dogcount = 0; //超时重启，主程序循环清零，不清零的话100秒重启系统
 
@@ -273,13 +272,6 @@ bool magic_passwd() {
 EthernetClient clientn;
 void loop() {
   dogcount = 0;
-  if (timer1 == 1) { //60秒测温一次
-    ds1820_start();
-  }
-  if (timer1 == 0) {
-    timer1 = 60; //测温ok
-    ds1820_all();
-  }
 
   clientn = server.available();
   if (clientn) {//有数据进来
@@ -376,7 +368,6 @@ ISR(WDT_vect) {
   }
   ms += 30;
   if (ms > 1000) {
-    if (timer1 > 0) timer1--;//定时器1 测温
     if (timer2 > 0) timer2--;//定时器2 链接远程服务器
     ms -= 1000;
   }
