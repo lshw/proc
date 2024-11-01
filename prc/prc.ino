@@ -2,6 +2,8 @@
   bootloader 以 "pro mini 为基础，融丝H,L,E从FF，DA，FD 改成 C2 DA FD"，从外置晶振8Mhz，改成RC8Mhz
   把arduino例子里的arduinoISP写到一个uno里， 然后，临时插上一个8M晶振，10->reset(update-左脚),11->MOSI,12->MISO,13-CLK,GND-GND,VCC->5Vin
   然后编程器选 "Arduino as ISP",点"工具"->"烧录引导程序"
+
+编译时， 需要安装OneWire库， maintainer=Paul Stoffregen
 */
 
 //#define AUTOLINK_ENABLE  //autolink to remote enable ,
@@ -22,6 +24,7 @@
 #include <Ethernet2.h>
 #include <OneWire.h>
 #define EEPROM_OFFSET 12
+boolean auth = false;
 int16_t celsius[11];
 boolean alreadyConnected = false;
 EthernetClient client;
@@ -285,6 +288,7 @@ void loop() {
       if ( alreadyConnected)
         client.stop(); //有bye状态的老的连接，就先踢掉
       alreadyConnected = true;
+      auth = false; //需要登陆
       client = clientn;
     }
   }
@@ -303,6 +307,7 @@ void loop() {
     if (!client.connected()) {
       client.stop();
       alreadyConnected = false;
+      auth = false;
     } else {
       if (client.available() > 0) { //client tcp有数据进来
         menu(S_TCP);
@@ -330,6 +335,7 @@ void com_shell() {
     if (!client.connected()) {
       client.stop();
       alreadyConnected = false;
+      auth = false;
       return;
     }
     while (client.available() > 0) { //tcp有数据进来
@@ -352,7 +358,7 @@ void com_shell() {
         if (chlen >= sizeof(chs)) break;
       }
       client.write(chs, chlen);
-      if (ms0 < millis())
+      if (ms0 < millis() || client.available())
         break; //最多2秒
     }
   }
@@ -429,7 +435,7 @@ void menu( uint8_t  stype) {
     s = &client;
   hello(s);
   s->setTimeout(20000);
-  if ( stype != S_SERIAL) {
+  if ( stype != S_SERIAL && !auth) {
     password = eeprom_read_u32(PASSWD0);
     if (password != 0) {
       s->print(F("passwd: "));
@@ -442,6 +448,7 @@ void menu( uint8_t  stype) {
         return;
       }
     }
+    auth = true;
   }
   s->print(F("ip="));
   s->print(Ethernet.localIP());
@@ -806,7 +813,7 @@ void set_passwd(Stream *s) {
     }
   }
   s_clean(s);
-  s->print(F("New password: "));
+  s->print(F("New password(0-9): "));
   passwd = s->parseInt();
   s->println();
   s_clean(s);
