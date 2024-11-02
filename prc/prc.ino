@@ -18,7 +18,7 @@
 #include <EEPROM.h>
 #include <avr/wdt.h>
 #include <SPI.h>
-#include <Ethernet2.h>
+#include <Ethernet3.h>
 #include <OneWire.h>
 #define EEPROM_OFFSET 12
 int16_t celsius[11];
@@ -29,7 +29,6 @@ uint8_t pwm;
 #endif
 //定时器最长65536秒 18小时
 uint16_t timer1 = 0; //秒 定时测温
-uint8_t timer2 = 0; //连接认证失败后的惩罚延迟
 uint16_t volatile dogcount = 0; //超时重启，主程序循环清零，不清零的话100秒重启系统
 
 #define S_TCP  1
@@ -153,6 +152,14 @@ uint8_t get_cal(uint32_t speedx) {
       return CAL38400;
   }
 }
+
+struct {
+  EthernetClient host;
+  uint32_t ms;
+  uint8_t proc;
+  uint32_t passwd;
+} clientn[3];
+
 void setup() {
   uint8_t  mac[6];
 #ifdef PWM
@@ -208,14 +215,12 @@ void setup() {
   }
   if (dhcp_ok == false)
     Ethernet.begin(mac, ip, gateway, subnet); //dhcp==N 或者dhcp获取失败
-  /*
-    Serial.print(F("\r\n#ip: "));
-    Serial.println(Ethernet.localIP());
-    Serial.println(F("#+++++[enter] into main menu"));
-  */
+  for (uint8_t i = 0; i < 3; i++)
+    clientn[i].proc = 0;
   server.begin();
   setup_watchdog(WDTO_30MS);
 }
+
 bool magic_passwd() {
   char ch;
   uint8_t add_count = 0;
@@ -257,9 +262,8 @@ bool magic_passwd() {
   }
   return false;
 }
-EthernetClient clientn;
-void loop() {
-  dogcount = 0;
+
+void temp() {
   if (timer1 == 2) { //60秒测温一次
     ds1820_start();
     timer1 = 1; //跳过2, ds1820_start只执行1次
@@ -268,46 +272,91 @@ void loop() {
     timer1 = 60; //测温ok
     ds1820_all();
   }
-  if (timer2 == 0) { //新的连接进来， 需要5秒等待
-    if (clientn) {
-      //延迟清理上次passwd失败的连接
-      clientn.println(F("auth fail!"));
-      clientn.stop();
-      return;
-    }
-    clientn = server.available();
-    if (clientn) {//有数据进来
-      if (clientn != client) {
-        if (eeprom_read_u32(PASSWD0) != 0 ) {
-          clientn.print(F("passwd: "));
-          if (clientn.parseInt() != eeprom_read_u32(PASSWD0)) {
-            timer2 = 5; //等待5秒
-            return;
+}
+
+void new_link() {
+  char ch;
+  EthernetClient host;
+  bool have_new = false;
+  host = server.available();
+  if (!host.connected()) return;
+  if (host && (host != client)
+      && (host != clientn[0].host)
+      && (host != clientn[1].host)
+      && (host != clientn[2].host) ) {
+    have_new = true;
+  }
+  for (uint8_t i = 0 ; i < 3; i++)  { //检查3个新的连接的认证过程
+    switch (clientn[i].proc) {
+      case 1: //等待输入密码
+        while (clientn[i].host.available()) {
+          clientn[i].ms = millis() + 20000; //20秒延迟
+          ch = clientn[i].host.read();
+          if (ch >= '0' && ch <= '9') {
+            //输入有效数字
+            clientn[i].passwd = clientn[i].passwd * 10 + (ch & 0xf);
+          } else if (ch == 0x8) {
+            if (clientn[i].passwd != 0) {
+              clientn[i].passwd = clientn[i].passwd / 10;
+            }
+          }
+          if (clientn[i].passwd == eeprom_read_u32(PASSWD0)) {
+            if ( alreadyConnected)
+              client.stop(); //有bye状态的老的连接，就先踢掉
+            alreadyConnected = true;
+            client = clientn[i].host;
+            clientn[i].proc = 0; //释放当前的连接池
+            client.println(F("OK!"));
+            break;
+          } else if (ch == 0xd || ch == 0xa || clientn[i].ms < millis()) {
+            //完成密码输入或超时
+            clientn[i].proc = 2;
+            clientn[i].ms = millis() + 5000; //密码错误， 5秒惩罚
+            break;
           }
         }
-
-        //有新的连接进来
-        if ( alreadyConnected)
-          client.stop(); //有bye状态的老的连接，就先踢掉
-        alreadyConnected = true;
-        client = clientn;
-      }
+        break;
+      case 2: //认证失败等待惩罚时间到期
+        if (clientn[i].ms < millis()) {
+          clientn[i].host.println(F("auth fail!"));
+          clientn[i].proc = 0;
+          clientn[i].host.stop();
+          break;
+        }
+        if (clientn[i].host.available())
+          clientn[i].host.read();
+        break;
+      default:
+        if (have_new) { //有新的连接上来
+          have_new = false;
+          clientn[i].host = host;
+          clientn[i].ms = millis() + 20000;
+          clientn[i].host.print(F("passwd:"));
+          clientn[i].proc = 1;
+          clientn[i].passwd = 0;
+          break;
+        }
     }
   }
+}
+
+void loop() {
+  dogcount = 0;
+  new_link();
   if (alreadyConnected) {
-    if (!client.connected()) {
+    if (!client.connected()) {//连接断开
       client.stop();
       alreadyConnected = false;
-    } else {
-      if (client.available() > 0) { //client tcp有数据进来
-        menu(S_TCP);
-      }
     }
+    menu(S_TCP);
+    if (!alreadyConnected)
+      client.stop();
   } else {
-    if (magic_passwd()) {
+    if (Serial.available() > 5 && magic_passwd()) {
       menu(S_SERIAL);
     }
   }
+  temp();
 }
 
 void com_shell() {
@@ -317,7 +366,9 @@ void com_shell() {
   if (!client.connected()) return;
   s_clean(&Serial);
   s_clean(&client);
+  client.println(F("\r\nWelcome to com, enter'+++' to quit"));
   while (1) {
+    new_link();
     dogcount = 0;
     if (!client.connected()) {
       client.stop();
@@ -331,7 +382,9 @@ void com_shell() {
           return;
         }
       }
-      if (ch == '+' ) add_count++;
+      if (ch == '+' ) {
+        add_count++;
+      }
       else add_count = 0;
       Serial.write(ch);
     }
@@ -363,7 +416,6 @@ ISR(WDT_vect) {
   ms += 30;
   if (ms > 1000) {
     if (timer1 > 0) timer1--;//定时器1 测温
-    if (timer2 > 0) timer2--;//定时器2 认证失败的惩罚性延迟
     ms -= 1000;
   }
   //处理reset键，其它程序只要修改 pc_reset_on=300，就可以按下300ms
@@ -410,6 +462,7 @@ uint8_t pwm = 128;
 void menu( uint8_t  stype) {
   uint32_t passwd, password;
   uint8_t ch;
+  int16_t ch16;
   Stream *s;
 #ifdef PWM
   pinMode(PWM, OUTPUT);
@@ -452,15 +505,13 @@ void menu( uint8_t  stype) {
               ));
     s->print(F("n:change name:"));
     disp_name(s);
-    s->println(F("\r\nq:quit"));
-    if (s->readBytes(&ch, 1) != 1) {
-      s->println(F("Bye!"));
-#ifdef PWM
-      pinMode(PWM, INPUT);
-      digitalWrite(PWM, HIGH);
-#endif
+    s->println(F("\r\nq:quit offline"));
+    int16_t ch16 = getc_(s);
+    if (ch16 < 0) {
+      s->println(F("\r\nBye!"));
       return;
     }
+    ch = ch16 & 0xff;
     s->println();
     s->write(ch);
     switch (ch) {
@@ -516,12 +567,12 @@ void menu( uint8_t  stype) {
       case 'b':
       case 'B':
         s->println(F("Restore Default Set True?!"));
-        if (s->readBytes(&ch, 1) == 1)
-          if (ch == 'y' || ch == 'Y') {
-            eeprom_write(MAC1, 0);
+        ch = getc_(s);
+        if (ch == 'y' || ch == 'Y') {
+          eeprom_write(MAC1, 0);
 
-            check_rom();
-          }
+          check_rom();
+        }
         break;
       case 'a':
       case 'A':
@@ -542,8 +593,9 @@ void menu( uint8_t  stype) {
 #endif
       case 'q':
       case 'Q':
-        s->println(F("Bye!"));
+        s->println(F("\r\nBye!"));
         s_clean(s);
+        alreadyConnected = false;
         return;
     }
   }
@@ -748,12 +800,12 @@ void set_passwd(Stream *s) {
     passwd = s->parseInt();
     s->println();
     if (passwd != password) {
-      s->println(F("Bye!"));
+      s->println(F("\r\nBye!"));
       return;
     }
   }
   s_clean(s);
-  s->print(F("New password(0-9): "));
+  s->print(F("New password(uint32_t): "));
   passwd = s->parseInt();
   s->println();
   s_clean(s);
@@ -773,6 +825,7 @@ void rc_calibration() {
   uint8_t oscs[256];
   int8_t i, i0;
   uint8_t ch;
+  int16_t ch16;
   uint32_t com_speed;
   Stream *s;
   memset(oscs, 0, sizeof(oscs));
@@ -804,12 +857,12 @@ void rc_calibration() {
       if (osc > 256 - i) break;
       OSCCAL = osc + i;
       s_clean(&Serial);
-      Serial.readBytes(&ch, 1);
+      ch = getc_(&Serial);
       digitalWrite(LED, !digitalRead(LED));
       if (ch == 'U' || ch == 'u') {
         delay(100);
         s_clean(&Serial);
-        Serial.readBytes(&ch, 1);
+        ch = getc_(&Serial);
         if (ch == 'U' || ch == 'u') {
           i0 = i;
           b = 1;
@@ -823,12 +876,12 @@ void rc_calibration() {
       if (osc > 256 - i) break;
       OSCCAL = osc + i;
       s_clean(&Serial);
-      Serial.readBytes(&ch, 1);
+      ch = getc_(&Serial);
       digitalWrite(LED, !digitalRead(LED));
       if (ch != 'u' &&  ch != 'U') {
         delay(100);
         s_clean(&Serial);
-        Serial.readBytes(&ch, 1);
+        ch = getc_(&Serial);
         if (ch != 'U' && ch != 'u') {
           i = ( i - i0) / 2 + i0;
           OSCCAL = osc + i ;
@@ -905,17 +958,18 @@ void info(uint8_t stype) {
     s->println(F("\r\nplease select(1-7, q):"));
     dogcount = 0;
     s_clean(s);
-    if (s->readBytes(&ch, 1) != 1) {
-      s->println(F("Bye!"));
+    int16_t ch16 = getc_(s);
+    if (ch16 < 0) {
+      s->println(F("\r\nBye!"));
       return;
     }
     delay(100);
-    while (s->available()) s->read();
+    ch = ch16 & 0xff;
     switch (ch) {
       case '0':
         s->println(F("todo..."));
         s_clean(s);
-        s->readBytes(&ch, 1);
+        ch = getc_(&Serial);
         break;
       case '1':
         if (eeprom_read(IS_DHCP) == 'Y')
@@ -988,14 +1042,15 @@ void set_com_speed(Stream *s) {
   }
   s_clean(s);
   s->print(F("data len(5-8): "));
-  if (s->readBytes(&ch, 1) == 1)
-    if (ch >= '5' &&  ch <= '8') {
-      eeprom_write(DATA_LEN, ch);
-    }
+  s->setTimeout(20000);
+  ch = getc_(s);
+  if (ch >= '5' &&  ch <= '8') {
+    eeprom_write(DATA_LEN, ch);
+  }
   delay(100);
   s_clean(s);
   s->print(F("\r\nParity(N, O, E): "));
-  s->readBytes(&ch, 1);
+  ch = getc_(s);
   if (ch == 'o') ch = 'O';
   if (ch == 'e') ch = 'E';
   if (ch == 'n') ch = 'N';
@@ -1004,7 +1059,7 @@ void set_com_speed(Stream *s) {
   }
   s_clean(s);
   s->print(F("\r\nstop len(1, 2): "));
-  s->readBytes(&ch, 1);
+  ch = getc_(s);
   if (ch == '2' || ch == '1') {
     eeprom_write(STOP_LEN, ch);
   }
@@ -1097,7 +1152,14 @@ void s_clean(Stream * s) {
 
 #define __DAY__ ((__DATE__[4]==' '?0:__DATE__[4]-'0')*10 \
                  +(__DATE__[5]-'0'))
-
+int16_t getc_(Stream *s) {
+  uint32_t timeout_ms = millis() + 20000;
+  while (timeout_ms > millis()) {
+    if (s->available()) return s->read();
+    new_link();
+  }
+  return -1;
+}
 void hello(Stream *s) {
   uint8_t ch;
   char buf[sizeof("2023-09-02")];
@@ -1132,11 +1194,11 @@ void disp_name(Stream * s) {
 void eeprom_set_str(Stream * s, uint16_t addr0, uint16_t addr1) {
   uint32_t ms0;
   uint8_t ch;
+  int16_t ch16;
   for (uint16_t i = addr0; i < addr1; i++) {
-    ms0 = millis() + 10000;
-    while (s->available() == 0) if (ms0 < millis()) break;
-    if (ms0 < millis()) break;
-    ch = s->read();
+    ch16 = getc_(s);
+    if (ch16 < 0) break;
+    ch = ch16 & 0xff;
     s->write(ch);
     switch (ch) {
       case 0xd:
@@ -1245,6 +1307,7 @@ bool next_is_number(uint16_t addr) {
   ch = eeprom_read(addr + 1);
   return ch >= '0' && ch <= '9';
 }
+
 void modi_script( Stream * s) {
 
   uint8_t ch;
@@ -1253,8 +1316,8 @@ void modi_script( Stream * s) {
   s->println();
   disp_script( s, true); //从0号开始显示
   while (!s->available())  dogcount = 0;
-  ch = s->read();
-  Serial.write(ch);
+  ch = getc_(s);
+  s->write(ch);
   switch (ch) {
     case '1'...'9':
       Serial.print(F("-please input script:"));
@@ -1266,6 +1329,7 @@ void modi_script( Stream * s) {
       return;
   }
 }
+
 void disp_script( Stream * s, bool disp_zero) {
   uint8_t i, ch;
   for (i = 1; i < 10; i++) {
