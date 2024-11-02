@@ -274,12 +274,13 @@ void temp() {
   }
 }
 
-void new_link() {
+bool new_link() {
   char ch;
   EthernetClient host;
   bool have_new = false;
+  digitalWrite(A4, (millis() / 100) % 2);
   host = server.available();
-  if (!host.connected()) return;
+  if (!host.connected()) return false;
   if (host && (host != client)
       && (host != clientn[0].host)
       && (host != clientn[1].host)
@@ -301,13 +302,16 @@ void new_link() {
             }
           }
           if (clientn[i].passwd == eeprom_read_u32(PASSWD0)) {
-            if ( alreadyConnected)
+            if ( alreadyConnected) {
+              client.println(F("\r\nnew client up, you are offline.\r\n"));
               client.stop(); //有bye状态的老的连接，就先踢掉
+            }
             alreadyConnected = true;
             client = clientn[i].host;
             clientn[i].proc = 0; //释放当前的连接池
             client.println(F("OK!"));
-            break;
+            clientn[i].host.flush();
+            return true;
           } else if (ch == 0xd || ch == 0xa || clientn[i].ms < millis()) {
             //完成密码输入或超时
             clientn[i].proc = 2;
@@ -332,12 +336,14 @@ void new_link() {
           clientn[i].host = host;
           clientn[i].ms = millis() + 20000;
           clientn[i].host.print(F("passwd:"));
+          clientn[i].host.flush();
           clientn[i].proc = 1;
           clientn[i].passwd = 0;
           break;
         }
     }
   }
+  return false;
 }
 
 void loop() {
@@ -368,7 +374,7 @@ void com_shell() {
   s_clean(&client);
   client.println(F("\r\nWelcome to com, enter'+++' to quit"));
   while (1) {
-    new_link();
+    if(new_link()) return; //切换了连接
     dogcount = 0;
     if (!client.connected()) {
       client.stop();
@@ -506,9 +512,11 @@ void menu( uint8_t  stype) {
     s->print(F("n:change name:"));
     disp_name(s);
     s->println(F("\r\nq:quit offline"));
-    int16_t ch16 = getc_(s);
+    int16_t ch16 = -1;
+    while ( ch16 == -1)
+      ch16 = getc_(s);
     if (ch16 < 0) {
-      s->println(F("\r\nBye!"));
+      s->println(F("\r\nBye!\r\n"));
       return;
     }
     ch = ch16 & 0xff;
@@ -593,7 +601,7 @@ void menu( uint8_t  stype) {
 #endif
       case 'q':
       case 'Q':
-        s->println(F("\r\nBye!"));
+        s->println(F("\r\nBye!\r\n"));
         s_clean(s);
         alreadyConnected = false;
         return;
@@ -800,7 +808,7 @@ void set_passwd(Stream *s) {
     passwd = s->parseInt();
     s->println();
     if (passwd != password) {
-      s->println(F("\r\nBye!"));
+      s->println(F("\r\nBye!\r\n"));
       return;
     }
   }
@@ -960,7 +968,7 @@ void info(uint8_t stype) {
     s_clean(s);
     int16_t ch16 = getc_(s);
     if (ch16 < 0) {
-      s->println(F("\r\nBye!"));
+      s->println(F("\r\nBye!\r\n"));
       return;
     }
     delay(100);
@@ -1156,7 +1164,7 @@ int16_t getc_(Stream *s) {
   uint32_t timeout_ms = millis() + 20000;
   while (timeout_ms > millis()) {
     if (s->available()) return s->read();
-    new_link();
+    if(new_link()) return -1;
   }
   return -1;
 }
