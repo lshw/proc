@@ -5,8 +5,6 @@
 
   编译时， 需要安装OneWire库， maintainer=Paul Stoffregen
 */
-//#define AUTOLINK_ENABLE  //autolink to remote enable ,
-//#define PWM 5     //pwn enable,
 #ifndef GIT_COMMIT_ID
 #define GIT_COMMIT_ID "test"
 #endif
@@ -156,9 +154,6 @@ uint8_t get_cal(uint32_t speedx) {
       return CAL38400;
   }
 }
-#ifdef AUTOLINK_ENABLE
-uint8_t remote_cycle;
-#endif
 void setup() {
   uint8_t  mac[6];
 #ifdef PWM
@@ -221,9 +216,6 @@ void setup() {
   */
   server.begin();
   setup_watchdog(WDTO_30MS);
-#ifdef AUTOLINK_ENABLE
-  remote_cycle = eeprom_read(REMOTE_CYCLE);
-#endif
 }
 bool magic_passwd() {
   char ch;
@@ -288,16 +280,6 @@ void loop() {
       client = clientn;
     }
   }
-#ifdef AUTOLINK_ENABLE
-  if (!alreadyConnected) { //无连接
-    if (remote_cycle > 0 && timer2 == 0) { //如果服务器没有客户端接入，就试试远程
-      timer2 = 60;
-      timer2 = remote_cycle; //每x分钟，连一次远程
-      remote_link();
-      remote_cycle = eeprom_read(REMOTE_CYCLE);
-    }
-  }
-#endif
 
   if (alreadyConnected) {
     if (!client.connected()) {
@@ -307,13 +289,11 @@ void loop() {
     } else {
       if (client.available() > 0) { //client tcp有数据进来
         menu(S_TCP);
-        save_set();
       }
     }
   } else {
     if (magic_passwd()) {
       menu(S_SERIAL);
-      save_set();
     }
   }
 
@@ -926,27 +906,6 @@ void info(uint8_t stype) {
         s->print(ch);
         if (i < 3)      s->write('.');
       }
-    } else {
-#ifdef AUTOLINK_ENABLE
-      s->print(F("\r\n5.REMOTE ENABLE: "));
-      remote_cycle = eeprom_read(REMOTE_CYCLE);
-      if (remote_cycle == 0) s->print(F("Disable")); //autolink  default Disable
-      else {
-        s->print(remote_cycle);
-        s->print(F(" minute"));
-        if (remote_cycle > 1) s->write('s');
-        s->print(F("\r\n6.hostname: "));
-        for (i = 0; i < 30; i++) {
-          ch = eeprom_read(REMOTE_HOST + i);
-          if (ch == 0 || ch == 0xff) break;
-          s->write(ch);
-        }
-        s->print(F("\r\n7.port: "));
-        i = eeprom_read(REMOTE_PORT_H);
-        i = (i << 8) | eeprom_read(REMOTE_PORT_L);
-        s->print(i);
-      }
-#endif
     }
     s->println(F("\r\nplease select(1-7, q):"));
     dogcount = 0;
@@ -982,27 +941,6 @@ void info(uint8_t stype) {
         s->print(F("please input gateway: "));
         save_set(GW0, s);
         break;
-#ifdef AUTOLINK_ENABLE
-      case '5':
-        s->print(F("please input cycle(minutes, 0=disable): "));
-        ch = s->parseInt();
-        s->println(ch, HEX);
-        eeprom_write(REMOTE_CYCLE, ch);
-        remote_cycle = ch;
-        timer2 = 0; //马上发送一次
-        break;
-
-      case '6':
-        s->print(F("please input remote hostname: "));
-        eeprom_set_str(s, REMOTE_HOST, REMOTE_HOST + 30);
-        break;
-      case '7':
-        s->print(F("please input remote port: "));
-        i = s->parseInt();
-        eeprom_write(REMOTE_PORT_H, i / 0x100);
-        eeprom_write(REMOTE_PORT_L, i & 0xFF);
-        break;
-#endif
       case 'q':
       case 'Q':
       case 0x1b:
@@ -1185,17 +1123,6 @@ void hello(Stream *s) {
   s->print(F("\r\n#"));
   ds1820_disp(s);
 }
-#ifdef AUTOLINK_ENABLE
-void remote_link() {
-  char hostname[30];
-  uint8_t i;
-  for (i = 0; i < sizeof(hostname); i++) {
-    hostname[i] = eeprom_read(REMOTE_HOST + i);
-    if (hostname[i] == 0) break;
-  }
-  client.connect(hostname, (uint16_t)(eeprom_read(REMOTE_PORT_H) << 8) | eeprom_read(REMOTE_PORT_L));
-}
-#endif
 void disp_name(Stream * s) {
   char ch;
   for (uint16_t i = NAME0; i <= NAME10; i++) {
@@ -1299,17 +1226,6 @@ void run_script( Stream * s, uint8_t script_n) {
           delay(n);
         }
         break;
-#ifdef PWM
-      case 'm':
-      case 'M':
-        if (next_is_number(eeprom_addr)) {
-          eeprom_addr++;
-          pwm = get_uint16(eeprom_addr);
-          s->print(pwm);
-          analogWrite(PWM, pwm);
-        }
-        break;
-#endif
     }
     eeprom_addr++;
     ch = eeprom_read(eeprom_addr);
@@ -1371,8 +1287,3 @@ void disp_script( Stream * s, bool disp_zero) {
   }
 }
 
-void save_set() { //退出菜单时，保存pwm位置等设置
-#ifdef PWM
-  eeprom_write(PWM_NOW, pwm);
-#endif
-}
