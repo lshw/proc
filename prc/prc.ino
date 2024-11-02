@@ -294,12 +294,15 @@ bool new_link() {
             client.println(F("OK!"));
             clientn[i].host.flush();
             return true;
-          } else if (ch == 0xd || ch == 0xa || clientn[i].ms < millis()) {
-            //完成密码输入或超时
-            clientn[i].proc = 2;
-            clientn[i].ms = millis() + 5000; //密码错误， 5秒惩罚
-            break;
+          } else if (ch == 0xd || ch == 0xa ) {
+            clientn[i].ms = 0;
           }
+        }
+        if ( clientn[i].ms < millis()) {
+          //完成密码输入或超时
+          clientn[i].proc = 2;
+          clientn[i].ms = millis() + 5000; //密码错误， 5秒惩罚
+          break;
         }
         break;
       case 2: //认证失败等待惩罚时间到期
@@ -356,7 +359,7 @@ void loop() {
 }
 
 void com_shell() {
-  char ch, chs[512];
+  uint8_t ch, chs[512];
   uint8_t add_count = 0;
   uint16_t chlen = 0;
   if (!client.connected()) return;
@@ -373,6 +376,7 @@ void com_shell() {
     }
     while (client.available() > 0) { //tcp有数据进来
       ch = client.read();
+      if (ch >= 0xf4) continue;
       if (ch == 0xd || ch == 0xa) {
         if (add_count > 4) {
           return;
