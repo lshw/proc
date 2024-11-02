@@ -220,45 +220,28 @@ void setup() {
   server.begin();
   setup_watchdog(WDTO_30MS);
 }
-
-bool magic_passwd() {
-  char ch;
-  uint8_t add_count = 0;
-  Serial.flush();
-  uint32_t ms;
-  ms = millis() + 10000;
-  while (ms > millis() && add_count <= 6) {
-    while (Serial.available()) {
-      ms = millis() + 10000;
-      ch = Serial.read();
-      if (ch == 0xd || ch == 0xa) {
-        if (add_count > 6) break;
-      } else if (ch == '+') {
-        add_count++;
+int8_t magic_flag = 0;
+bool magic() {
+  if (magic_flag == -6) return true;
+  if (!Serial.available()) return false;
+  char ch = Serial.peek();
+  switch (Serial.peek()) {
+    case '+':
+      if ((magic_flag >= 0) && (magic_flag <= 6)) magic_flag++;
+      break;
+    case 'U':
+    case 'u':
+      if (magic_flag == 6) magic_flag = -1;
+      else if ((magic_flag <= -1) && (magic_flag > -6))
+        magic_flag--;
+      break;
+    case 0xd:
+    case 0xa:
+      if (magic_flag == -6) {
+        return true;
       }
-      else {
-        add_count = 0;
-      }
-    }
-  }
-  if (add_count < 6) return false;
-  ms = millis() + 10000;
-  add_count = 0;
-  while (ms > millis()) {
-    while (Serial.available()) {
-      ms = millis() + 10000;
-      ch = Serial.read();
-      if (ch == 0xd || ch == 0xa) {
-        if (add_count > 6) {
-          return true;
-        }
-      } else if (ch == 'U' || ch == 'u') {
-        add_count++;
-      }	else if (ch == '+') continue;
-      else {
-        add_count = 0;
-      }
-    }
+    default:
+      magic_flag = 0;
   }
   return false;
 }
@@ -278,13 +261,12 @@ bool new_link() {
   char ch;
   EthernetClient host;
   bool have_new = false;
-  digitalWrite(A4, (millis() / 100) % 2);
   host = server.available();
   if (!host.connected()) return false;
   if (host && (host != client)
-      && (host != clientn[0].host)
-      && (host != clientn[1].host)
-      && (host != clientn[2].host) ) {
+      && ((clientn[0].proc == 0) || (host != clientn[0].host))
+      && ((clientn[1].proc == 0) || (host != clientn[1].host))
+      && ((clientn[2].proc == 0) || (host != clientn[2].host)) ) {
     have_new = true;
   }
   for (uint8_t i = 0 ; i < 3; i++)  { //检查3个新的连接的认证过程
@@ -335,7 +317,9 @@ bool new_link() {
           have_new = false;
           clientn[i].host = host;
           clientn[i].ms = millis() + 20000;
-          clientn[i].host.print(F("passwd:"));
+          clientn[i].host.print(F("line"));
+          clientn[i].host.print(i);
+          clientn[i].host.print(F(" passwd:"));
           clientn[i].host.flush();
           clientn[i].proc = 1;
           clientn[i].passwd = 0;
@@ -358,11 +342,17 @@ void loop() {
     if (!alreadyConnected)
       client.stop();
   } else {
-    if (Serial.available() > 5 && magic_passwd()) {
+    if (magic_flag == -6) {
       menu(S_SERIAL);
+      magic_flag = 0;
     }
   }
   temp();
+  uint32_t timeout_ms = millis() + 2000;
+  while (Serial.available() && timeout_ms > millis()) {
+    magic();
+    Serial.read();
+  }
 }
 
 void com_shell() {
@@ -374,7 +364,7 @@ void com_shell() {
   s_clean(&client);
   client.println(F("\r\nWelcome to com, enter'+++' to quit"));
   while (1) {
-    if(new_link()) return; //切换了连接
+    if (new_link()) return; //切换了连接
     dogcount = 0;
     if (!client.connected()) {
       client.stop();
@@ -1164,7 +1154,7 @@ int16_t getc_(Stream *s) {
   uint32_t timeout_ms = millis() + 20000;
   while (timeout_ms > millis()) {
     if (s->available()) return s->read();
-    if(new_link()) return -1;
+    if (new_link()) return -1;
   }
   return -1;
 }
