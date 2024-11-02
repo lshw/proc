@@ -21,7 +21,6 @@
 #include <Ethernet2.h>
 #include <OneWire.h>
 #define EEPROM_OFFSET 12
-boolean auth = false;
 int16_t celsius[11];
 boolean alreadyConnected = false;
 EthernetClient client;
@@ -30,7 +29,7 @@ uint8_t pwm;
 #endif
 //定时器最长65536秒 18小时
 uint16_t timer1 = 0; //秒 定时测温
-uint16_t timer2 = 0; //秒
+uint8_t timer2 = 0; //连接认证失败后的惩罚延迟
 uint16_t volatile dogcount = 0; //超时重启，主程序循环清零，不清零的话100秒重启系统
 
 #define S_TCP  1
@@ -261,31 +260,44 @@ bool magic_passwd() {
 EthernetClient clientn;
 void loop() {
   dogcount = 0;
-  if (timer1 == 1) { //60秒测温一次
+  if (timer1 == 2) { //60秒测温一次
     ds1820_start();
+    timer1 = 1; //跳过2, ds1820_start只执行1次
   }
   if (timer1 == 0) {
     timer1 = 60; //测温ok
     ds1820_all();
   }
+  if (timer2 == 0) { //新的连接进来， 需要5秒等待
+    if (clientn) {
+      //延迟清理上次passwd失败的连接
+      clientn.println(F("auth fail!"));
+      clientn.stop();
+      return;
+    }
+    clientn = server.available();
+    if (clientn) {//有数据进来
+      if (clientn != client) {
+        if (eeprom_read_u32(PASSWD0) != 0 ) {
+          clientn.print(F("passwd: "));
+          if (clientn.parseInt() != eeprom_read_u32(PASSWD0)) {
+            timer2 = 5; //等待5秒
+            return;
+          }
+        }
 
-  clientn = server.available();
-  if (clientn) {//有数据进来
-    if (clientn != client) {
-      //有新的连接进来
-      if ( alreadyConnected)
-        client.stop(); //有bye状态的老的连接，就先踢掉
-      alreadyConnected = true;
-      auth = false; //需要登陆
-      client = clientn;
+        //有新的连接进来
+        if ( alreadyConnected)
+          client.stop(); //有bye状态的老的连接，就先踢掉
+        alreadyConnected = true;
+        client = clientn;
+      }
     }
   }
-
   if (alreadyConnected) {
     if (!client.connected()) {
       client.stop();
       alreadyConnected = false;
-      auth = false;
     } else {
       if (client.available() > 0) { //client tcp有数据进来
         menu(S_TCP);
@@ -296,7 +308,6 @@ void loop() {
       menu(S_SERIAL);
     }
   }
-
 }
 
 void com_shell() {
@@ -311,7 +322,6 @@ void com_shell() {
     if (!client.connected()) {
       client.stop();
       alreadyConnected = false;
-      auth = false;
       return;
     }
     while (client.available() > 0) { //tcp有数据进来
@@ -353,7 +363,7 @@ ISR(WDT_vect) {
   ms += 30;
   if (ms > 1000) {
     if (timer1 > 0) timer1--;//定时器1 测温
-    if (timer2 > 0) timer2--;//定时器2 链接远程服务器
+    if (timer2 > 0) timer2--;//定时器2 认证失败的惩罚性延迟
     ms -= 1000;
   }
   //处理reset键，其它程序只要修改 pc_reset_on=300，就可以按下300ms
@@ -411,21 +421,6 @@ void menu( uint8_t  stype) {
     s = &client;
   hello(s);
   s->setTimeout(20000);
-  if ( stype != S_SERIAL && !auth) {
-    password = eeprom_read_u32(PASSWD0);
-    if (password != 0) {
-      s->print(F("passwd: "));
-      passwd = s->parseInt();
-      if (client)
-        s_clean(&client);
-      s_clean(&Serial);
-      if (passwd != password) {
-        s->println();
-        return;
-      }
-    }
-    auth = true;
-  }
   s->print(F("ip="));
   s->print(Ethernet.localIP());
   while (1) {
