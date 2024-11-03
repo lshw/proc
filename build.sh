@@ -54,9 +54,6 @@ ver=$date-${a:0:7}
 echo $ver
 export COMMIT=$ver
 
-#传递宏定义 GIT_VER 到源码中，源码git版本 编译参数
-CXXFLAGS="-DGIT_VER=\"$ver\" -DBUILD_SET=\"$fqbn\""
-
 mkdir -p /tmp/${me}_build /tmp/${me}_cache
 
 fqbn="arduino:avr:pro:cpu=8MHzatmega328"
@@ -64,14 +61,15 @@ fqbn="arduino:avr:pro:cpu=8MHzatmega328"
 #开发板:Arduino AVR Boards -> Arduino Pro or Pro Mini
 #处理器:Atmega328P(3.3V,8Mhz)
 
+#传递宏定义 GIT_VER 到源码中，源码git版本 编译参数
+CXXFLAGS="-DGIT_VER=\"$ver\" -DBUILD_SET=\"$fqbn\""
+
 #安装编译环境
-echo $arduino_cli core install $( echo $fqbn |awk -F: '{print $1":"$2}' )
 $arduino_cli core install $( echo $fqbn |awk -F: '{print $1":"$2}' )
 
 #安装硬件驱动库
 for lib in OneWire Ethernet3
 do
-echo $lib
  if ! [ -x $home/Arduino/libraries/$lib ] ; then
   $arduino_cli lib install $lib
  fi
@@ -96,4 +94,3 @@ fi
 exit
 Sketch uses 29078 bytes (94%) of program storage space. Maximum is 30720 bytes.
 Global variables use 694 bytes (33%) of dynamic memory, leaving 1354 bytes for local variables. Maximum is 2048 bytes.
-
