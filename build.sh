@@ -1,29 +1,52 @@
 #!/bin/bash
-cd `dirname $0`
+cd $( dirname $0 )
+
+home=$( realpath ~ )
+
+if ! [ -x prc ] ; then
+ mkdir -p $home/Arduino
+ cd $home/Arduino
+ if ! [ -x proc ] ; then
+  git clone https://github.com/lshw/proc
+ fi
+ cd proc
+fi
 
 me=`whoami`
-if [ "$me" == "root" ] ; then
-  home=/home/liushiwei
-else
-  home=~
-fi
 
-if [ -x $home/sketchbook/libraries ] ; then
- sketchbook=$home/sketchbook
-else
- sketchbook=$home/Arduino
-fi
-
-arduino=/opt/arduino-1.8.19
-if ! [ -x $arduino/arduino ] ; then
- echo install arduino to $arduino ?
- read yes
- if [ "a$yes" == 'ay' ] ; then
-  wget "https://downloads.arduino.cc/arduino-1.8.19-linux64.tar.xz" -c  -O /opt/arduino-1.8.19-linux64.tar.xz
-  tar Jxvf /opt/arduino-1.8.19-linux64.tar.xz -C /opt
+for p  in wget git
+do
+ which $p
+ if [ $? != 0 ]; then
+  apt install -y $p
  fi
+done
+which arduino-cli
+if [ $? != 0 ] ; then
+ echo  $home/bin/arduino-cli
+ if [ -x $home/bin/arduino-cli ] ; then
+  arduino_cli=$home/bin/arduino-cli
+ else
+  echo 没有找到 arduino-cli
+  echo 请到https://github.com/arduino/arduino-cli/releases 下载， 并放到 /usr/local/bin目录下
+  mkdir ~/bin -p
+  wget https://github.com/arduino/arduino-cli/releases/download/v1.0.4/arduino-cli_1.0.4_Linux_64bit.tar.gz -c
+  tar zxf arduino-cli_1.0.4_Linux_64bit.tar.gz -C $home/bin arduino-cli
+  if [ $? != 0 ] ; then
+   exit
+  fi
+  if [ "$me" == "root" ] ;then
+   mv $home/bin/arduino-cli /usr/local/bin
+   arduino_cli=arduino-cli
+  else
+   arduino_cli=$home/bin/arduino-cli
+  fi
+ fi
+else
+ arduino_cli=arduino-cli
 fi
-astyle  --options=$arduino/lib/formatter.conf ./prc/*.ino
+
+echo $arduino_cli
 rm -f ./prc/*.orig
 a=`git rev-parse --short HEAD`
 date=`git log --date=short -1 |grep ^Date: |awk '{print $2}' |tr -d '-'`
@@ -31,65 +54,46 @@ ver=$date-${a:0:7}
 echo $ver
 export COMMIT=$ver
 
-arduinoset=$home/.arduino15
+#传递宏定义 GIT_VER 到源码中，源码git版本 编译参数
+CXXFLAGS="-DGIT_VER=\"$ver\" -DBUILD_SET=\"$fqbn\""
+
 mkdir -p /tmp/${me}_build /tmp/${me}_cache
 
-#开发板:Arduino AVR Boards -> Arduino Pro or Pro Mini
-#处理器:Atmega328P(3.3V,8Mhz) 
 fqbn="arduino:avr:pro:cpu=8MHzatmega328"
-
 #fqbn="m328pb:avr:atmega328pbic:speed=8mhz"
+#开发板:Arduino AVR Boards -> Arduino Pro or Pro Mini
+#处理器:Atmega328P(3.3V,8Mhz)
 
-#传递宏定义 GIT_VER 到源码中，源码git版本
-CXXFLAGS="-DGIT_VER=\"$ver\" -DBUILD_SET=\"$fqbn\""
-$arduino/arduino-builder \
--dump-prefs \
--logger=machine \
--hardware $arduino/hardware \
--hardware $arduinoset/packages \
--tools $arduino/tools-builder \
--tools $arduino/hardware/tools/avr \
--tools $arduinoset/packages \
--built-in-libraries $arduino/libraries \
--libraries $sketchbook/libraries \
--fqbn=$fqbn \
--ide-version=10819 \
--build-path /tmp/${me}_build \
--warnings=none \
--prefs build.extra_flags="$CXXFLAGS" \
--build-cache /tmp/${me}_cache \
--prefs=build.warn_data_percentage=75 \
--verbose \
-./prc/prc.ino
-if [ $? != 0 ] ; then
-  exit
-fi
-rm -f /tmp/${me}_build/prc.ino.bin
-$arduino/arduino-builder \
--compile \
--logger=machine \
--hardware $arduino/hardware \
--hardware $arduinoset/packages \
--tools $arduino/tools-builder \
--tools $arduino/hardware/tools/avr \
--tools $arduinoset/packages \
--built-in-libraries $arduino/libraries \
--libraries $sketchbook/libraries \
--fqbn=$fqbn \
--ide-version=10819 \
--build-path /tmp/${me}_build \
--warnings=none \
--prefs build.extra_flags="$CXXFLAGS" \
--build-cache /tmp/${me}_cache \
--prefs=build.warn_data_percentage=75 \
--verbose \
-./prc/prc.ino |tee /tmp/${me}_info.log
+#安装编译环境
+echo $arduino_cli core install $( echo $fqbn |awk -F: '{print $1":"$2}' )
+$arduino_cli core install $( echo $fqbn |awk -F: '{print $1":"$2}' )
 
+#安装硬件驱动库
+for lib in OneWire Ethernet3
+do
+echo $lib
+ if ! [ -x $home/Arduino/libraries/$lib ] ; then
+  $arduino_cli lib install $lib
+ fi
+done
+
+$arduino_cli compile \
+--fqbn $fqbn \
+--verbose \
+--build-property build.extra_flags="$CXXFLAGS" \
+--build-path /tmp/${me}_build \
+--build-cache-path /tmp/${me}_cache \
+prc |tee /tmp/${me}_info.log
+sync
 if [ -e /tmp/${me}_build/prc.ino.hex ] ; then
-
-  grep "Global vari" /tmp/${me}_info.log |sed -n "s/^.* \[\([0-9]*\) \([0-9]*\) \([0-9]*\) \([0-9]*\)\].*$/RAM:使用\1字节(\3%),剩余\4字节/p"
-  grep "Sketch uses" /tmp/${me}_info.log |sed -n "s/^.* \[\([0-9]*\) \([0-9]*\) \([0-9]*\)\].*$/ROM:使用\1字节(\3%)/p"
+  grep "Global vari" /tmp/${me}_info.log |sed -n "s/^Global variables use \([0-9]*\) bytes (\([0-9]*\)%) of dynamic memory, leaving \([0-9]*\) bytes for local variables. Maximum is 2048 bytes.$/RAM:使用\2%(\1字节),剩余\3字节/p"
+  grep "^Sketch" /tmp/${me}_info.log |sed -n "s/Sketch uses \([0-9]*\) bytes (\([0-9]*\)%.*$/ROM:使用\2%(\1字节)/p"
   echo ver:$ver
 
-  cp -a /tmp/${me}_build/prc.ino.hex .
+  cp -a /tmp/${me}_build/prc.ino.hex ./prc.hex
+ls -l $( realpath .)/prc.hex
 fi
+exit
+Sketch uses 29078 bytes (94%) of program storage space. Maximum is 30720 bytes.
+Global variables use 694 bytes (33%) of dynamic memory, leaving 1354 bytes for local variables. Maximum is 2048 bytes.
+
